@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -45,6 +46,9 @@ type Config struct {
 	CertFile   string // TLS cert file for server
 	KeyFile    string // TLS key file for server
 	Insecure   bool   // Skip TLS certificate verification for client
+
+	IPRateLimit  int // 每个IP每秒的请求限制
+	KeyRateLimit int // 每个key每秒的请求限制
 }
 
 // ==================== Server 实现 ====================
@@ -65,6 +69,13 @@ type SinglePortProxy struct {
 	upgrader       websocket.Upgrader
 	config         *Config
 	nextRequestID  uint64
+
+	// 每个 key 的速率限制器
+	keyLimiters map[string]*rate.Limiter
+	// 每个 IP 的速率限制器
+	ipLimiters map[string]*rate.Limiter
+	// 保护 rate limiters map 的互斥锁
+	rateLimitMu sync.RWMutex
 }
 
 // NewSinglePortProxy 创建一个新的服务器实例
@@ -76,6 +87,8 @@ func NewSinglePortProxy(config *Config) *SinglePortProxy {
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
+		keyLimiters: make(map[string]*rate.Limiter),
+		ipLimiters:  make(map[string]*rate.Limiter),
 	}
 }
 
@@ -215,9 +228,76 @@ func (p *SinglePortProxy) clientReadLoop(wsConn *websocket.Conn, key string) {
 	}
 }
 
-// handlePublicHTTPRequest 处理来自公网的请求 (支持流式传输)
+// getLimiter 获取或创建一个指定 key 的速率限制器
+func (p *SinglePortProxy) getKeyLimiter(key string) *rate.Limiter {
+	p.rateLimitMu.Lock()
+	defer p.rateLimitMu.Unlock()
+
+	limiter, exists := p.keyLimiters[key]
+	if !exists {
+		// 如果配置为0，则不进行限制
+		if p.config.KeyRateLimit <= 0 {
+			// 返回一个总是允许的限制器
+			limiter = rate.NewLimiter(rate.Inf, 0)
+		} else {
+			// 创建一个新的限制器: 每秒 N 个请求，突发 2N 个
+			limiter = rate.NewLimiter(rate.Limit(p.config.KeyRateLimit), p.config.KeyRateLimit*2)
+		}
+		p.keyLimiters[key] = limiter
+	}
+
+	return limiter
+}
+
+// getIPLimiter 获取或创建一个指定 IP 的速率限制器
+func (p *SinglePortProxy) getIPLimiter(ip string) *rate.Limiter {
+	p.rateLimitMu.Lock()
+	defer p.rateLimitMu.Unlock()
+
+	limiter, exists := p.ipLimiters[ip]
+	if !exists {
+		// 如果配置为0，则不进行限制
+		if p.config.IPRateLimit <= 0 {
+			// 返回一个总是允许的限制器
+			limiter = rate.NewLimiter(rate.Inf, 0)
+		} else {
+			// 创建一个新的限制器: 每秒 N 个请求，突发 2N 个
+			limiter = rate.NewLimiter(rate.Limit(p.config.IPRateLimit), p.config.IPRateLimit*2)
+		}
+		p.ipLimiters[ip] = limiter
+	}
+
+	return limiter
+}
+
+// handlePublicHTTPRequest 处理来自公网的请求 (支持流式传输) 增加速率限制
 func (p *SinglePortProxy) handlePublicHTTPRequest(w http.ResponseWriter, r *http.Request) {
-	key := "default"
+	// 检查 IP 速率限制
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	ipLimiter := p.getIPLimiter(ip)
+	if !ipLimiter.Allow() {
+		log.Printf("IP %s rate limited", ip)
+		http.Error(w, "Too many requests from your IP", http.StatusTooManyRequests)
+		return
+	}
+
+	// 2. 获取密钥
+	key := r.Header.Get("X-Tunnel-Key")
+	if key == "" {
+		key = "default"
+	}
+
+	// 检查 Key 速率限制
+	keyLimiter := p.getKeyLimiter(key)
+	if !keyLimiter.Allow() {
+		log.Printf("Key '%s' rate limited", key)
+		http.Error(w, "Too many requests for this service", http.StatusTooManyRequests)
+		return
+	}
 
 	p.connsMu.RLock()
 	wsConn, ok := p.clientConns[key]
@@ -609,6 +689,8 @@ func parseFlags() *Config {
 	flag.StringVar(&config.CertFile, "cert", "", "TLS证书文件路径 (server模式)")
 	flag.StringVar(&config.KeyFile, "key-file", "", "TLS私钥文件路径 (server模式)")
 	flag.BoolVar(&config.Insecure, "insecure", false, "跳过TLS证书验证 (client模式)")
+	flag.IntVar(&config.IPRateLimit, "ip-rate-limit", config.IPRateLimit, "每个IP每秒的请求限制 (0为无限制)")
+	flag.IntVar(&config.KeyRateLimit, "key-rate-limit", config.KeyRateLimit, "每个key每秒的请求限制 (0为无限制)")
 
 	flag.Parse()
 

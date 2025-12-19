@@ -48,7 +48,7 @@ go build -o singleproxy
 #### 使用 HTTPS (推荐)
 
 ```bash
-./singleproxy -mode=server -port=443 -cert=/path/to/your/cert.pem -key-file=/path/to/your/key.pem
+./singleproxy -mode=server -port=443 -cert=/path/to/your/cert.pem -key-file=/path/to/your/key.pem -ip-rate-limit=50 -key-rate-limit=30
 ```
 
 #### 使用 HTTP (仅用于测试)
@@ -93,6 +93,8 @@ curl -H "X-Tunnel-Key: my-secret-service-key" https://your-proxy-domain.com/some
 | `-target` | Client | 内网目标服务的地址 | - |
 | `-key` | Client | 用于识别服务的隧道密钥 | `default` |
 | `-insecure` | Client | 跳过对服务器 TLS 证书的验证 (不安全，仅用于测试) | `false` |
+| `-ip-rate-limit` | Server | 每个 IP 地址的最大请求速率 (0 表示不限制) | `0` |
+| `-key-rate-limit` | Server | 每个密钥的最大请求速率 (0 表示不限制) | `0` |
 
 ## 💡 示例：暴露一个本地 Web 服务
 
@@ -124,7 +126,6 @@ curl -H "X-Tunnel-Key: local-web" https://proxy.example.com/
 
 - [ ] TCP 隧道: 扩展协议以支持任意 TCP 流量，从而可以代理 SSH、数据库等服务
 - [ ] 加密：端到端加密，防止数据泄露
-- [ ] 速率限制: 在服务器端实现速率限制，防止滥用
 
 ## 📄 许可证
 
