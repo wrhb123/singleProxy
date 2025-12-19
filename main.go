@@ -120,11 +120,67 @@ func (p *SinglePortProxy) Start() error {
 
 // ServeHTTP 是 http.Handler 接口的实现，用于路由请求
 func (p *SinglePortProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// 路由1: 处理来自内网客户端的 WebSocket 隧道连接
 	if strings.HasPrefix(r.URL.Path, "/ws/") {
 		p.handleTunnelRegistration(w, r)
 		return
 	}
+
+	// 路由2: 处理来自公网的代理请求 (正向代理)
+	if r.Header.Get("X-Proxy-Key") != "" {
+		p.handleForwardProxyRequest(w, r)
+		return
+	}
+
+	// 路由3: 处理来自公网的普通 HTTP 请求 (内网穿透)
 	p.handlePublicHTTPRequest(w, r)
+}
+
+// handleForwardProxyRequest 处理标准的HTTP/HTTPS正向代理请求
+func (p *SinglePortProxy) handleForwardProxyRequest(w http.ResponseWriter, r *http.Request) {
+	log.Printf("PROXY Request: %s %s", r.Method, r.URL.String())
+
+	// 对于HTTPS的CONNECT方法，需要特殊处理，这里先实现HTTP的GET/POST等
+	if r.Method == "CONNECT" {
+		http.Error(w, "CONNECT method is not yet supported in this proxy mode", http.StatusNotImplemented)
+		return
+	}
+
+	// 创建一个用于转发到目标服务器的 http.Client
+	// 设置 Proxy 函数为 nil，可以防止代理请求被再次转发，形成代理循环
+	transport := &http.Transport{
+		Proxy: func(req *http.Request) (*url.URL, error) {
+			return nil, nil // 表示直连，不使用任何代理
+		},
+	}
+	client := &http.Client{Transport: transport, Timeout: 30 * time.Second}
+
+	// 克隆请求，因为原始请求的 Body 只能读取一次
+	outReq := r.Clone(r.Context())
+
+	// 必须清空 RequestURI，否则 client.Do 会报错
+	outReq.RequestURI = ""
+
+	// 发起请求到目标服务器
+	resp, err := client.Do(outReq)
+	if err != nil {
+		log.Printf("Proxy error when connecting to target %s: %v", r.URL.Host, err)
+		http.Error(w, "Proxy Error: Failed to connect to target", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	// 将目标服务器的响应头复制回给客户端
+	for key, values := range resp.Header {
+		w.Header()[key] = values
+	}
+
+	// 将目标服务器的状态码复制回给客户端
+	w.WriteHeader(resp.StatusCode)
+
+	// 将目标服务器的响应体流式复制回给客户端
+	// io.Copy 会高效地处理数据传输，无需将整个响应体读入内存
+	io.Copy(w, resp.Body)
 }
 
 // handleTunnelRegistration 处理内网客户端的隧道注册请求
