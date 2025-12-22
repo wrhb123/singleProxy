@@ -86,13 +86,13 @@ func (p *SinglePortProxy) Start() error {
 		if err != nil {
 			return fmt.Errorf("failed to listen on port %s: %v", p.config.ListenPort, err)
 		}
-		logger.Info("Server listening with TLS on port %s", p.config.ListenPort)
+		logger.Info("Server listening with TLS", "port", p.config.ListenPort)
 	} else {
 		listener, err = net.Listen("tcp", ":"+p.config.ListenPort)
 		if err != nil {
 			return fmt.Errorf("failed to listen on port %s: %v", p.config.ListenPort, err)
 		}
-		logger.Info("Server listening without TLS on port %s", p.config.ListenPort)
+		logger.Info("Server listening without TLS", "port", p.config.ListenPort)
 	}
 
 	logger.Info("Server supports: HTTP/WebSocket tunneling and SOCKS5 proxy")
@@ -100,7 +100,9 @@ func (p *SinglePortProxy) Start() error {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			logger.Error("Failed to accept connection: %v", err)
+			logger.Error("Failed to accept connection",
+				"remote_addr", conn.RemoteAddr().String(),
+				"error", err)
 			continue
 		}
 

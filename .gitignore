@@ -70,5 +70,6 @@ node_modules/
 /grafana/data/
 
 .claude
+.serena
 .spec-*
 claude.md

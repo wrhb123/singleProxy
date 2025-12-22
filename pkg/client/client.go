@@ -62,7 +62,9 @@ func (c *TunnelClient) writer() {
 		select {
 		case message := <-c.writeChan:
 			if err := c.wsConn.WriteMessage(websocket.BinaryMessage, message); err != nil {
-				logger.Error("Error writing to WebSocket: %v", err)
+				logger.Error("Error writing to WebSocket",
+					"key", c.key,
+					"error", err)
 				return
 			}
 		case <-c.closeChan:
@@ -350,7 +352,9 @@ func (c *TunnelClient) keepAlive() {
 			c.lastPingTime = time.Now()
 			// 使用 WriteControl 来发送 Ping，它是线程安全的，不会与 writer goroutine 冲突
 			if err := c.wsConn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
-				logger.Error("Keep-alive failed: %v", err)
+				logger.Error("Keep-alive failed",
+					"key", c.key,
+					"error", err)
 				return
 			}
 			logger.Debug("Sent ping to server at %s", c.lastPingTime.Format("15:04:05"))
