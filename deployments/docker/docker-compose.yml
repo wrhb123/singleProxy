@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  single-proxy-server:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile
+    ports:
+      - "8080:8080"
+      - "443:443"
+    command: ["./singleproxy", "-mode=server", "-port=8080"]
+    volumes:
+      - ./certs:/certs
+    environment:
+      - PROXY_MODE=server
+    restart: unless-stopped
+
+  single-proxy-client:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile
+    command: [
+      "./singleproxy", 
+      "-mode=client", 
+      "-server=ws://single-proxy-server:8080", 
+      "-target=host.docker.internal:3000",
+      "-key=demo-service"
+    ]
+    depends_on:
+      - single-proxy-server
+    restart: unless-stopped
