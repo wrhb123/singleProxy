@@ -1,9 +1,12 @@
 package server
 
 import (
+	"bufio"
+	"io"
 	"net"
 	"net/http"
 	"singleproxy/pkg/logger"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -268,21 +271,36 @@ func (p *SinglePortProxy) handlePublicHTTPRequest(w http.ResponseWriter, r *http
 		return
 	}
 
+	// 尝试WebSocket隧道
 	p.connsMu.RLock()
-	wsConn, ok := p.clientConns[key]
+	wsConn, wsExists := p.clientConns[key]
 	p.connsMu.RUnlock()
 
-	if !ok {
+	// 尝试HTTP长轮询隧道
+	p.httpTunnelMgr.mu.RLock()
+	httpClient, httpExists := p.httpTunnelMgr.clients[key]
+	p.httpTunnelMgr.mu.RUnlock()
+
+	if !wsExists && !httpExists {
 		logger.Warn("No active tunnel for key",
 			"client_ip", ip,
 			"key", key,
 			"method", r.Method,
 			"url", r.URL.String(),
-			"available_keys", func() []string {
+			"available_ws_keys", func() []string {
 				p.connsMu.RLock()
 				defer p.connsMu.RUnlock()
 				keys := make([]string, 0, len(p.clientConns))
 				for k := range p.clientConns {
+					keys = append(keys, k)
+				}
+				return keys
+			}(),
+			"available_http_keys", func() []string {
+				p.httpTunnelMgr.mu.RLock()
+				defer p.httpTunnelMgr.mu.RUnlock()
+				keys := make([]string, 0, len(p.httpTunnelMgr.clients))
+				for k := range p.httpTunnelMgr.clients {
 					keys = append(keys, k)
 				}
 				return keys
@@ -291,12 +309,7 @@ func (p *SinglePortProxy) handlePublicHTTPRequest(w http.ResponseWriter, r *http
 		return
 	}
 
-	logger.Debug("Found active tunnel connection",
-		"client_ip", ip,
-		"key", key,
-		"method", r.Method,
-		"url", r.URL.String())
-
+	// 序列化HTTP请求
 	reqData, err := protocol.SerializeHTTPRequest(r)
 	if err != nil {
 		logger.Error("Failed to serialize request",
@@ -342,31 +355,61 @@ func (p *SinglePortProxy) handlePublicHTTPRequest(w http.ResponseWriter, r *http
 	p.handlersMu.Unlock()
 
 	tunnelMsg := protocol.TunnelMessage{ID: requestID, Type: protocol.MSG_TYPE_HTTP_REQ, Payload: reqData}
-	msgData, _ := protocol.SerializeTunnelMessage(tunnelMsg)
 
-	logger.Debug("Sending request to client via WebSocket",
-		"client_ip", ip,
-		"key", key,
-		"request_id", requestID,
-		"tunnel_message_size", len(msgData))
-
-	if err := wsConn.WriteMessage(websocket.BinaryMessage, msgData); err != nil {
-		logger.Error("Failed to send request to client",
+	// 选择隧道类型发送消息
+	if wsExists {
+		// 使用WebSocket隧道
+		logger.Debug("Sending request to client via WebSocket",
 			"client_ip", ip,
 			"key", key,
-			"request_id", requestID,
-			"error", err)
-		p.handlersMu.Lock()
-		delete(p.streamHandlers, requestID)
-		p.handlersMu.Unlock()
-		http.Error(w, "Failed to forward request", http.StatusBadGateway)
-		return
-	}
+			"request_id", requestID)
 
-	logger.Debug("Request sent to client, waiting for response",
-		"client_ip", ip,
-		"key", key,
-		"request_id", requestID)
+		msgData, _ := protocol.SerializeTunnelMessage(tunnelMsg)
+		if err := wsConn.WriteMessage(websocket.BinaryMessage, msgData); err != nil {
+			logger.Error("Failed to send request to WebSocket client",
+				"client_ip", ip,
+				"key", key,
+				"request_id", requestID,
+				"error", err)
+			p.handlersMu.Lock()
+			delete(p.streamHandlers, requestID)
+			p.handlersMu.Unlock()
+			http.Error(w, "Failed to forward request", http.StatusBadGateway)
+			return
+		}
+
+		logger.Debug("Request sent to WebSocket client",
+			"client_ip", ip,
+			"key", key,
+			"request_id", requestID)
+
+	} else if httpExists {
+		// 使用HTTP长轮询隧道
+		logger.Debug("Sending request to client via HTTP tunnel",
+			"client_ip", ip,
+			"key", key,
+			"request_id", requestID)
+
+		// 发送消息到长轮询客户端
+		select {
+		case httpClient.pollChan <- &tunnelMsg:
+			logger.Debug("Request queued for HTTP tunnel client",
+				"client_ip", ip,
+				"key", key,
+				"request_id", requestID)
+		default:
+			// 通道已满，客户端可能无响应
+			logger.Error("Failed to queue request for HTTP tunnel client - channel full",
+				"client_ip", ip,
+				"key", key,
+				"request_id", requestID)
+			p.handlersMu.Lock()
+			delete(p.streamHandlers, requestID)
+			p.handlersMu.Unlock()
+			http.Error(w, "Tunnel client busy", http.StatusServiceUnavailable)
+			return
+		}
+	}
 
 	// 等待流结束或超时 (增加更长的超时时间，避免与连接超时冲突)
 	timeout := 90 * time.Second
@@ -377,13 +420,18 @@ func (p *SinglePortProxy) handlePublicHTTPRequest(w http.ResponseWriter, r *http
 	case <-handler.done:
 		// 流正常结束
 		duration := time.Since(startTime)
+		tunnelType := "WebSocket"
+		if httpExists && !wsExists {
+			tunnelType = "HTTP"
+		}
 		logger.Info("Response stream completed successfully",
 			"client_ip", ip,
 			"key", key,
 			"request_id", requestID,
 			"duration", duration,
 			"method", r.Method,
-			"url", r.URL.String())
+			"url", r.URL.String(),
+			"tunnel_type", tunnelType)
 	case <-timer.C:
 		duration := time.Since(startTime)
 		logger.Error("Timeout waiting for response stream",
@@ -398,5 +446,588 @@ func (p *SinglePortProxy) handlePublicHTTPRequest(w http.ResponseWriter, r *http
 		delete(p.streamHandlers, requestID)
 		p.handlersMu.Unlock()
 		http.Error(w, "Gateway Timeout", http.StatusGatewayTimeout)
+	}
+}
+
+// handleHTTPTunnel 处理HTTP长轮询模式的隧道连接
+func (p *SinglePortProxy) handleHTTPTunnel(w http.ResponseWriter, r *http.Request) {
+	// 解析路径获取操作类型和key
+	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/http-tunnel/"), "/")
+	if len(pathParts) < 2 {
+		http.Error(w, "Invalid HTTP tunnel path format. Use: /http-tunnel/{operation}/{key}", http.StatusBadRequest)
+		return
+	}
+	
+	operation := pathParts[0]
+	key := pathParts[1]
+	
+	if key == "" {
+		http.Error(w, "Tunnel key cannot be empty", http.StatusBadRequest)
+		return
+	}
+
+	logger.Debug("Processing HTTP tunnel request",
+		"operation", operation,
+		"key", key,
+		"method", r.Method,
+		"remote_addr", r.RemoteAddr)
+
+	switch operation {
+	case "register":
+		p.handleHTTPTunnelRegister(w, r, key)
+	case "poll":
+		p.handleHTTPTunnelPoll(w, r, key)
+	case "response":
+		p.handleHTTPTunnelResponse(w, r, key)
+	default:
+		http.Error(w, "Invalid operation. Use: register, poll, or response", http.StatusBadRequest)
+	}
+}
+
+// handleHTTPTunnelRegister 处理客户端注册请求
+func (p *SinglePortProxy) handleHTTPTunnelRegister(w http.ResponseWriter, r *http.Request, key string) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed. Use POST", http.StatusMethodNotAllowed)
+		return
+	}
+
+	remoteAddr := r.RemoteAddr
+	logger.Info("HTTP tunnel client registering",
+		"key", key,
+		"remote_addr", remoteAddr)
+
+	// 创建或更新客户端
+	p.httpTunnelMgr.mu.Lock()
+	
+	// 清理旧的客户端连接（如果存在）
+	if oldClient, exists := p.httpTunnelMgr.clients[key]; exists {
+		close(oldClient.pollChan)
+		close(oldClient.responseChan)
+		logger.Info("Replacing existing HTTP tunnel client",
+			"key", key,
+			"old_remote_addr", oldClient.remoteAddr,
+			"new_remote_addr", remoteAddr)
+	}
+
+	// 创建新的客户端
+	client := &httpTunnelClient{
+		key:          key,
+		remoteAddr:   remoteAddr,
+		lastSeen:     time.Now(),
+		pollChan:     make(chan *protocol.TunnelMessage, 10), // 缓冲通道
+		responseChan: make(chan *protocol.TunnelMessage, 10),
+	}
+	p.httpTunnelMgr.clients[key] = client
+	clientCount := len(p.httpTunnelMgr.clients)
+	p.httpTunnelMgr.mu.Unlock()
+
+	// 启动客户端清理协程
+	go p.cleanupHTTPTunnelClient(key)
+
+	logger.Info("HTTP tunnel client registered successfully",
+		"key", key,
+		"remote_addr", remoteAddr,
+		"total_active_tunnels", clientCount)
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status": "registered", "message": "HTTP tunnel registered successfully"}`))
+}
+
+// handleHTTPTunnelPoll 处理客户端长轮询请求
+func (p *SinglePortProxy) handleHTTPTunnelPoll(w http.ResponseWriter, r *http.Request, key string) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed. Use GET", http.StatusMethodNotAllowed)
+		return
+	}
+
+	p.httpTunnelMgr.mu.RLock()
+	client, exists := p.httpTunnelMgr.clients[key]
+	p.httpTunnelMgr.mu.RUnlock()
+
+	if !exists {
+		http.Error(w, "Tunnel not registered. Please register first", http.StatusNotFound)
+		return
+	}
+
+	// 更新最后见到时间
+	p.httpTunnelMgr.mu.Lock()
+	client.lastSeen = time.Now()
+	p.httpTunnelMgr.mu.Unlock()
+
+	logger.Debug("HTTP tunnel client polling for messages",
+		"key", key,
+		"remote_addr", r.RemoteAddr)
+
+	// 长轮询：等待消息或超时
+	timeout := 30 * time.Second
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	w.Header().Set("Content-Type", "application/json")
+
+	select {
+	case msg := <-client.pollChan:
+		// 收到消息，立即返回
+		msgData, err := protocol.SerializeTunnelMessage(*msg)
+		if err != nil {
+			logger.Error("Failed to serialize tunnel message",
+				"key", key,
+				"error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write(msgData)
+
+		logger.Debug("HTTP tunnel message sent to client",
+			"key", key,
+			"message_id", msg.ID,
+			"message_type", msg.Type)
+
+	case <-timer.C:
+		// 超时，返回空响应
+		w.WriteHeader(http.StatusNoContent)
+		logger.Debug("HTTP tunnel poll timeout",
+			"key", key,
+			"timeout", timeout)
+
+	case <-r.Context().Done():
+		// 客户端取消请求
+		logger.Debug("HTTP tunnel poll cancelled by client",
+			"key", key)
+		return
+	}
+}
+
+// handleHTTPTunnelResponse 处理客户端响应
+func (p *SinglePortProxy) handleHTTPTunnelResponse(w http.ResponseWriter, r *http.Request, key string) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed. Use POST", http.StatusMethodNotAllowed)
+		return
+	}
+
+	p.httpTunnelMgr.mu.RLock()
+	client, exists := p.httpTunnelMgr.clients[key]
+	p.httpTunnelMgr.mu.RUnlock()
+
+	if !exists {
+		http.Error(w, "Tunnel not registered. Please register first", http.StatusNotFound)
+		return
+	}
+
+	// 读取响应数据
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		logger.Error("Failed to read response body",
+			"key", key,
+			"error", err)
+		http.Error(w, "Failed to read response body", http.StatusBadRequest)
+		return
+	}
+
+	// 反序列化消息
+	msg, err := protocol.DeserializeTunnelMessage(body)
+	if err != nil {
+		logger.Error("Failed to deserialize tunnel message",
+			"key", key,
+			"error", err)
+		http.Error(w, "Invalid message format", http.StatusBadRequest)
+		return
+	}
+
+	// 更新最后见到时间
+	p.httpTunnelMgr.mu.Lock()
+	client.lastSeen = time.Now()
+	p.httpTunnelMgr.mu.Unlock()
+
+	logger.Debug("HTTP tunnel response received",
+		"key", key,
+		"message_id", msg.ID,
+		"message_type", msg.Type)
+
+	// 处理响应消息
+	p.handleHTTPTunnelMessage(&msg, key)
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status": "received"}`))
+}
+
+// cleanupHTTPTunnelClient 定期清理不活跃的客户端
+func (p *SinglePortProxy) cleanupHTTPTunnelClient(key string) {
+	ticker := time.NewTicker(60 * time.Second) // 每分钟检查一次
+	defer ticker.Stop()
+
+	for range ticker.C {
+		p.httpTunnelMgr.mu.Lock()
+		client, exists := p.httpTunnelMgr.clients[key]
+		if !exists {
+			p.httpTunnelMgr.mu.Unlock()
+			return // 客户端已被删除，退出清理协程
+		}
+
+		// 检查客户端是否超时（5分钟无活动）
+		if time.Since(client.lastSeen) > 5*time.Minute {
+			logger.Info("Cleaning up inactive HTTP tunnel client",
+				"key", key,
+				"last_seen", client.lastSeen,
+				"inactive_duration", time.Since(client.lastSeen))
+			
+			close(client.pollChan)
+			close(client.responseChan)
+			delete(p.httpTunnelMgr.clients, key)
+			p.httpTunnelMgr.mu.Unlock()
+			return
+		}
+		p.httpTunnelMgr.mu.Unlock()
+	}
+}
+
+// handleHTTPTunnelMessage 处理来自HTTP长轮询客户端的响应消息
+func (p *SinglePortProxy) handleHTTPTunnelMessage(msg *protocol.TunnelMessage, key string) {
+	logger.Debug("Processing HTTP tunnel message",
+		"key", key,
+		"message_id", msg.ID,
+		"message_type", msg.Type)
+
+	switch msg.Type {
+	case protocol.MSG_TYPE_HTTP_RES:
+		// HTTP响应消息
+		p.handlersMu.Lock()
+		handler, ok := p.streamHandlers[msg.ID]
+		if !ok {
+			p.handlersMu.Unlock()
+			logger.Warn("No handler found for HTTP response",
+				"key", key,
+				"message_id", msg.ID)
+			return
+		}
+		p.handlersMu.Unlock()
+
+		// 反序列化HTTP响应
+		resp, err := protocol.DeserializeHTTPResponse(msg.Payload)
+		if err != nil {
+			logger.Error("Failed to deserialize HTTP response",
+				"key", key,
+				"message_id", msg.ID,
+				"error", err)
+			close(handler.done)
+			return
+		}
+
+		// 写入响应头
+		for key, values := range resp.Header {
+			for _, value := range values {
+				handler.writer.Header().Add(key, value)
+			}
+		}
+
+		// 写入状态码
+		handler.writer.WriteHeader(resp.StatusCode)
+
+		// 写入响应体
+		if resp.Body != nil {
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				logger.Error("Failed to read response body",
+					"key", key,
+					"message_id", msg.ID,
+					"error", err)
+			} else if len(body) > 0 {
+				_, err = handler.writer.Write(body)
+				if err != nil {
+					logger.Error("Failed to write response body",
+						"key", key,
+						"message_id", msg.ID,
+						"error", err)
+				}
+			}
+			resp.Body.Close()
+		}
+
+		// 完成响应
+		handler.flusher.Flush()
+		close(handler.done)
+
+		logger.Debug("HTTP tunnel response completed",
+			"key", key,
+			"message_id", msg.ID,
+			"status_code", resp.StatusCode)
+
+	case protocol.MSG_TYPE_HTTP_RES_CHUNK:
+		// HTTP响应数据块
+		p.handlersMu.Lock()
+		handler, ok := p.streamHandlers[msg.ID]
+		if !ok {
+			p.handlersMu.Unlock()
+			logger.Warn("No handler found for HTTP response chunk",
+				"key", key,
+				"message_id", msg.ID)
+			return
+		}
+		p.handlersMu.Unlock()
+
+		// 写入数据块
+		if len(msg.Payload) > 0 {
+			_, err := handler.writer.Write(msg.Payload)
+			if err != nil {
+				logger.Error("Failed to write response chunk",
+					"key", key,
+					"message_id", msg.ID,
+					"error", err)
+				close(handler.done)
+				return
+			}
+			handler.flusher.Flush()
+		}
+
+		logger.Debug("HTTP tunnel response chunk written",
+			"key", key,
+			"message_id", msg.ID,
+			"chunk_size", len(msg.Payload))
+
+	default:
+		logger.Warn("Unknown HTTP tunnel message type",
+			"key", key,
+			"message_id", msg.ID,
+			"message_type", msg.Type)
+	}
+}
+
+// handleHTTPProxy 处理HTTP CONNECT代理请求和基于路径的代理请求
+func (p *SinglePortProxy) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	
+	// 检查 IP 速率限制
+	ip, port, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		logger.Error("Failed to parse remote address for proxy",
+			"remote_addr", r.RemoteAddr,
+			"error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	logger.Debug("Processing HTTP proxy request",
+		"client_ip", ip,
+		"client_port", port,
+		"method", r.Method,
+		"url", r.URL.String(),
+		"user_agent", r.Header.Get("User-Agent"))
+
+	ipLimiter := p.getIPLimiter(ip)
+	if !ipLimiter.Allow() {
+		logger.Warn("IP rate limited for proxy request",
+			"client_ip", ip,
+			"method", r.Method,
+			"url", r.URL.String())
+		http.Error(w, "Too many requests from your IP", http.StatusTooManyRequests)
+		return
+	}
+
+	var targetHost, targetPort string
+
+	if r.Method == "CONNECT" {
+		// 标准 HTTP CONNECT 方法
+		host := r.URL.Host
+		if host == "" {
+			host = r.Host
+		}
+		
+		if strings.Contains(host, ":") {
+			targetHost, targetPort, err = net.SplitHostPort(host)
+			if err != nil {
+				logger.Error("Invalid CONNECT target",
+					"client_ip", ip,
+					"host", host,
+					"error", err)
+				http.Error(w, "Bad Request", http.StatusBadRequest)
+				return
+			}
+		} else {
+			targetHost = host
+			targetPort = "80" // 默认HTTP端口
+		}
+	} else if strings.HasPrefix(r.URL.Path, "/proxy/") {
+		// 基于路径的代理请求：/proxy/host:port/path
+		pathParts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/proxy/"), "/", 2)
+		if len(pathParts) == 0 || pathParts[0] == "" {
+			logger.Error("Invalid proxy path format",
+				"client_ip", ip,
+				"path", r.URL.Path)
+			http.Error(w, "Invalid proxy path format. Use: /proxy/host:port/path", http.StatusBadRequest)
+			return
+		}
+
+		hostPort := pathParts[0]
+		if strings.Contains(hostPort, ":") {
+			targetHost, targetPort, err = net.SplitHostPort(hostPort)
+			if err != nil {
+				logger.Error("Invalid proxy target in path",
+					"client_ip", ip,
+					"host_port", hostPort,
+					"error", err)
+				http.Error(w, "Bad Request", http.StatusBadRequest)
+				return
+			}
+		} else {
+			targetHost = hostPort
+			targetPort = "80" // 默认HTTP端口
+		}
+
+		// 重写请求路径，去掉代理前缀
+		if len(pathParts) > 1 {
+			r.URL.Path = "/" + pathParts[1]
+		} else {
+			r.URL.Path = "/"
+		}
+		r.URL.Host = net.JoinHostPort(targetHost, targetPort)
+		r.Host = r.URL.Host
+	}
+
+	logger.Info("HTTP proxy connection established",
+		"client_ip", ip,
+		"target_host", targetHost,
+		"target_port", targetPort,
+		"method", r.Method)
+
+	// 连接到目标服务器
+	targetAddr := net.JoinHostPort(targetHost, targetPort)
+	targetConn, err := net.DialTimeout("tcp", targetAddr, 30*time.Second)
+	if err != nil {
+		logger.Error("Failed to connect to target server",
+			"client_ip", ip,
+			"target_addr", targetAddr,
+			"error", err)
+		http.Error(w, "Bad Gateway", http.StatusBadGateway)
+		return
+	}
+	defer targetConn.Close()
+
+	logger.Debug("Successfully connected to target server",
+		"client_ip", ip,
+		"target_addr", targetAddr)
+
+	if r.Method == "CONNECT" {
+		// CONNECT方法：建立隧道
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			logger.Error("ResponseWriter does not support hijacking",
+				"client_ip", ip,
+				"target_addr", targetAddr)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		
+		clientConn, _, err := hijacker.Hijack()
+		if err != nil {
+			logger.Error("Failed to hijack connection",
+				"client_ip", ip,
+				"target_addr", targetAddr,
+				"error", err)
+			return
+		}
+		defer clientConn.Close()
+
+		logger.Debug("Connection hijacked successfully, starting tunnel",
+			"client_ip", ip,
+			"target_addr", targetAddr)
+
+		// 发送连接成功响应
+		_, err = clientConn.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
+		if err != nil {
+			logger.Error("Failed to send CONNECT response",
+				"client_ip", ip,
+				"target_addr", targetAddr,
+				"error", err)
+			return
+		}
+
+		// 开始双向数据转发
+		go func() {
+			defer targetConn.Close()
+			defer clientConn.Close()
+			io.Copy(targetConn, clientConn)
+		}()
+
+		_, err = io.Copy(clientConn, targetConn)
+		duration := time.Since(startTime)
+		
+		if err != nil {
+			logger.Debug("CONNECT tunnel closed with error",
+				"client_ip", ip,
+				"target_addr", targetAddr,
+				"duration", duration,
+				"error", err)
+		} else {
+			logger.Info("CONNECT tunnel completed successfully",
+				"client_ip", ip,
+				"target_addr", targetAddr,
+				"duration", duration)
+		}
+	} else {
+		// 基于路径的代理：转发HTTP请求
+		logger.Debug("Forwarding HTTP request to target",
+			"client_ip", ip,
+			"target_addr", targetAddr,
+			"method", r.Method,
+			"path", r.URL.Path)
+
+		// 转发请求到目标服务器
+		err = r.Write(targetConn)
+		if err != nil {
+			logger.Error("Failed to forward request to target",
+				"client_ip", ip,
+				"target_addr", targetAddr,
+				"error", err)
+			http.Error(w, "Bad Gateway", http.StatusBadGateway)
+			return
+		}
+
+		// 读取目标服务器的响应
+		targetReader := bufio.NewReader(targetConn)
+		resp, err := http.ReadResponse(targetReader, r)
+		if err != nil {
+			logger.Error("Failed to read response from target",
+				"client_ip", ip,
+				"target_addr", targetAddr,
+				"error", err)
+			http.Error(w, "Bad Gateway", http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+
+		// 复制响应头
+		for key, values := range resp.Header {
+			for _, value := range values {
+				w.Header().Add(key, value)
+			}
+		}
+
+		// 写入状态码
+		w.WriteHeader(resp.StatusCode)
+
+		// 复制响应体
+		_, err = io.Copy(w, resp.Body)
+		duration := time.Since(startTime)
+
+		if err != nil {
+			logger.Error("Failed to copy response body",
+				"client_ip", ip,
+				"target_addr", targetAddr,
+				"duration", duration,
+				"error", err)
+		} else {
+			logger.Info("HTTP proxy request completed successfully",
+				"client_ip", ip,
+				"target_addr", targetAddr,
+				"method", r.Method,
+				"status_code", resp.StatusCode,
+				"duration", duration)
+		}
 	}
 }

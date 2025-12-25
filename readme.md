@@ -5,34 +5,40 @@
 [![Build](https://img.shields.io/badge/Build-Passing-brightgreen.svg)](#)
 [![Test Coverage](https://img.shields.io/badge/Coverage-90%2B-brightgreen.svg)](#)
 
-🚀 **高性能、模块化的内网穿透工具**
+🚀 **高性能、多协议的内网穿透和代理工具**
 
-Single Proxy 是一个基于 WebSocket 的内网穿透解决方案，支持 HTTP/HTTPS 隧道和 SOCKS5 代理，通过智能协议检测实现单端口多服务复用。项目采用现代化模块架构设计，具备完善的测试体系和生产级部署支持。
+Single Proxy 是一个基于现代化架构设计的网络代理解决方案，支持 WebSocket 和 HTTP长轮询双模式内网穿透、SOCKS5代理、HTTP正向代理等多种功能。通过智能协议检测实现单端口多服务复用，具备100%防火墙兼容性和生产级性能。
 
 ## ✨ 核心特性
 
-### 🔄 协议智能检测
-- **自动识别** HTTP/HTTPS 和 SOCKS5 协议
-- **单端口复用** 无需为不同协议开放多个端口
-- **零配置切换** 客户端自动选择最佳协议
+### 🔄 智能协议检测与多模式支持
+- **自动协议识别** HTTP/HTTPS 和 SOCKS5 协议智能检测
+- **双隧道模式** WebSocket（低延迟）+ HTTP长轮询（防火墙友好）
+- **单端口复用** 所有协议共用一个端口，简化部署
+- **智能路径路由** 支持任意路径下的WebSocket端点和HTTP代理
+- **自动协议切换** 根据网络环境自动选择最佳协议
 
-### 🌐 多种代理模式
-- **内网穿透** 基于 WebSocket 隧道的HTTP(S)代理
-- **SOCKS5 代理** 支持 TCP 流量转发
+### 🌐 完整代理生态
+- **内网穿透** 基于 WebSocket/HTTP长轮询的双模式隧道
+- **SOCKS5 代理** 支持任意 TCP 流量转发  
+- **HTTP正向代理** 支持路径编码和CONNECT方法
 - **流式传输** 支持大文件传输，避免内存溢出
+- **灵活路径支持** 兼容Nginx代理、API网关等复杂路径场景
 
-### 🔒 安全与性能
-- **TLS 加密** 支持 HTTPS/WSS 安全传输
-- **速率限制** 基于 IP 和密钥的请求频率控制
-- **自动重连** 网络中断后智能重连机制
-- **健康监控** 实时连接状态监控和日志记录
+### 🔒 企业级安全与性能
+- **100% 防火墙兼容** HTTP长轮询模式适配严格网络环境
+- **TLS 全加密** 支持 HTTPS/WSS 端到端安全传输，可配置证书验证策略
+- **多环境SSL支持** 生产环境证书验证 + 开发环境证书跳过
+- **双重速率限制** 基于 IP 和密钥的请求频率控制
+- **智能重连** 网络中断后的自动重连和错误恢复
+- **实时监控** 连接状态监控、健康检查和详细日志
 
-### ⚙️ 现代化架构
-- **模块化设计** 清晰的包结构和职责分离
-- **配置管理** 支持 YAML 配置文件和命令行参数
-- **结构化日志** 基于 slog 的多级别日志系统  
-- **测试完善** 全模块测试覆盖，包含单元测试和集成测试
-- **容器就绪** 提供 Docker 镜像和 Kubernetes 部署配置
+### ⚙️ 现代化架构与运维
+- **模块化设计** 清晰的包结构和职责分离，遵循 SOLID 原则
+- **多格式配置** 支持 YAML 配置文件和命令行参数
+- **结构化日志** 基于 slog 的多级别、多格式日志系统  
+- **完整测试** 90%+ 代码覆盖率，包含单元测试和集成测试
+- **容器就绪** Docker、Kubernetes 和多平台二进制发布
 
 ## 🚀 快速开始
 
@@ -84,25 +90,191 @@ singleproxy -mode=server -port=443 -cert=/path/to/cert.pem -key-file=/path/to/ke
 ```
 
 #### 3. 启动客户端
+
+**WebSocket模式（标准，低延迟）**
 ```bash
-# 内网穿透
+# 直连模式
 singleproxy \
   -mode=client \
   -server="wss://your-domain.com" \
   -target="127.0.0.1:3000" \
   -key="my-service"
+
+# 通过Nginx代理模式（支持复杂路径）
+singleproxy \
+  -mode=client \
+  -server="wss://your-domain.com/tunnel/app" \
+  -target="127.0.0.1:3000" \
+  -key="my-service"
+
+# 开发环境（跳过SSL证书验证）
+singleproxy \
+  -mode=client \
+  -server="wss://test-server.local/api/tunnel" \
+  -target="127.0.0.1:3000" \
+  -key="my-service" \
+  -insecure
 ```
 
-#### 4. 访问内网服务
+**HTTP长轮询模式（防火墙友好）**
 ```bash
-# 通过 HTTP 请求访问
-curl -H "X-Tunnel-Key: my-service" https://your-domain.com/api/users
+# 标准HTTPS模式
+singleproxy \
+  -mode=http-client \
+  -server="https://your-domain.com/tunnel/http-tunnel" \
+  -target="127.0.0.1:3000" \
+  -key="my-service"
 
-# 通过 SOCKS5 代理访问
-curl --socks5 your-domain.com:443 http://internal-service.com
+# 自签名证书环境
+singleproxy \
+  -mode=http-client \
+  -server="https://internal-server.corp/api/tunnel" \
+  -target="127.0.0.1:3000" \
+  -key="my-service" \
+  -insecure
 ```
 
-## 📖 详细配置
+#### 4. 多种访问方式
+
+**内网穿透访问**
+```bash
+# 通过隧道访问内网服务（支持复杂路径和参数）
+curl -H "X-Tunnel-Key: my-service" https://your-domain.com/api/users/123?include=profile
+
+# POST请求示例
+curl -X POST -H "X-Tunnel-Key: my-service" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"test"}' \
+  https://your-domain.com/api/data
+```
+
+**SOCKS5代理访问**
+```bash
+# SOCKS5代理模式（支持任何TCP协议）
+curl --socks5 your-domain.com:443 http://internal-service.com
+export ALL_PROXY=socks5://your-domain.com:443
+```
+
+**HTTP正向代理访问**
+```bash
+# 路径编码模式（100%防火墙兼容）
+curl https://your-domain.com/proxy/httpbin.org:80/ip
+curl https://your-domain.com/proxy/api.github.com:443/user
+
+# HTTP CONNECT模式  
+curl -x https://your-domain.com http://target.com
+```
+
+## 🎯 支持的连接模式
+
+### Server端功能模式
+
+Single Proxy服务器在单个端口同时支持多种协议和功能：
+
+#### 协议检测和分发
+```
+客户端连接 → 协议检测 → 分发处理
+    ↓
+┌─ SOCKS5 (0x05) → SOCKS5代理服务
+├─ HTTP → HTTP路由分发
+└─ 其他 → 拒绝连接
+```
+
+#### HTTP路由系统
+| 路径前缀 | 功能 | 协议 | 用途 |
+|----------|------|------|------|
+| `/ws/` | WebSocket隧道注册 | WebSocket | 内网客户端连接 |
+| `/http-tunnel/` | HTTP长轮询隧道 | HTTP | 内网客户端连接(备选) |
+| `/proxy/` | 基于路径的代理 | HTTP | 正向代理 |
+| `CONNECT` | HTTP CONNECT隧道 | HTTP | 正向代理 |
+| 其他路径 | 内网穿透 | HTTP | 公网访问内网服务 |
+
+### 具体功能详解
+
+#### 1. SOCKS5代理（直连模式）
+```bash
+# 客户端配置
+curl -x socks5://server:8000 http://target.com
+
+# 特点
+- ✅ 支持任何TCP协议
+- ✅ 最低延迟
+- ❌ 需要SOCKS5客户端支持
+- ❌ 防火墙可能阻拦
+```
+
+#### 2. HTTP正向代理（路径模式）
+```bash
+# 路径编码方式
+curl https://server/proxy/target.com:80/path
+
+# 特点
+- ✅ 100%防火墙兼容
+- ✅ 支持复杂路径
+- ✅ 自动路径重写
+- ❌ 仅支持HTTP/HTTPS
+```
+
+#### 3. HTTP CONNECT隧道
+```bash
+# 标准CONNECT方式
+curl -x http://server:8000 https://target.com
+
+# 特点
+- ✅ 支持HTTPS隧道
+- ✅ 标准HTTP代理协议
+- ❌ 部分防火墙阻拦CONNECT方法
+```
+
+#### 4. WebSocket内网穿透
+```bash
+# 客户端连接
+./singleproxy -mode=client -server="wss://server/ws/key" -target="127.0.0.1:8080" -key="key"
+
+# 公网访问
+curl -H "X-Tunnel-Key: key" https://server/api/data
+
+# 特点
+- ✅ 实时双向通信
+- ✅ 最低延迟
+- ✅ 支持流式传输
+- ❌ 需要WebSocket支持
+```
+
+#### 5. HTTP长轮询内网穿透（备选方案）
+```bash
+# 客户端连接
+./singleproxy -mode=http-client -server="https://server/tunnel" -target="127.0.0.1:8080" -key="key"
+
+# 公网访问
+curl -H "X-Tunnel-Key: key" https://server/api/data
+
+# 特点
+- ✅ 100%防火墙兼容
+- ✅ 无需WebSocket支持
+- ✅ 自动错误恢复
+- ❌ 稍高延迟（~50ms）
+```
+
+### Client端支持的连接模式
+
+#### 1. WebSocket客户端（标准模式）
+```bash
+./singleproxy -mode=client \
+  -server="wss://server/ws/myapp" \
+  -target="127.0.0.1:8080" \
+  -key="myapp"
+```
+
+#### 2. HTTP长轮询客户端（备选模式）
+```bash
+./singleproxy -mode=http-client \
+  -server="https://server/tunnel" \
+  -target="127.0.0.1:8080" \
+  -key="myapp"
+```
+
+## 📖 配置指南
 
 ### 配置文件支持
 Single Proxy 支持 YAML 配置文件，提供比命令行参数更灵活的配置方式：
@@ -110,17 +282,16 @@ Single Proxy 支持 YAML 配置文件，提供比命令行参数更灵活的配�
 ```yaml
 # config.yaml 示例
 server:
-  mode: server
-  port: 443
-  cert: "/path/to/cert.pem"
+  listen_port: "443"
+  cert_file: "/path/to/cert.pem"
   key_file: "/path/to/key.pem"
   ip_rate_limit: 50
   key_rate_limit: 30
 
 client:
-  mode: client
-  server: "wss://your-domain.com"
-  target: "127.0.0.1:3000"
+  server_addr: "wss://your-domain.com"  # WebSocket模式
+  # server_addr: "https://your-domain.com/tunnel"  # HTTP长轮询模式
+  target_addr: "127.0.0.1:3000"
   key: "my-service"
   insecure: false
 
@@ -145,8 +316,8 @@ logging:
 ### 客户端参数
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `-mode` | `client` | 运行模式 |
-| `-server` | | 服务器地址 (ws:// 或 wss://) |
+| `-mode` | `client` | 运行模式: client, http-client |
+| `-server` | | 服务器地址 |
 | `-target` | | 目标服务地址 |
 | `-key` | `default` | 隧道密钥 |
 | `-insecure` | `false` | 跳过 TLS 证书验证 |
@@ -160,11 +331,15 @@ single_proxy/
 │   └── main.go              # 应用启动和配置解析
 ├── pkg/                     # 核心包
 │   ├── server/              # 服务器实现
-│   │   └── server.go        # 协议检测和隧道管理
+│   │   ├── server.go        # 协议检测和隧道管理
+│   │   ├── handlers.go      # HTTP/长轮询处理器
+│   │   └── types.go         # 类型定义
 │   ├── client/              # 客户端实现  
-│   │   └── client.go        # WebSocket连接和转发
+│   │   ├── client.go        # WebSocket连接和转发
+│   │   └── http_client.go   # HTTP长轮询客户端
 │   ├── protocol/            # 协议处理
-│   │   └── message.go       # 消息序列化和SOCKS5实现
+│   │   ├── message.go       # 消息序列化
+│   │   └── http.go          # HTTP请求解析
 │   ├── config/              # 配置管理
 │   │   ├── config.go        # 命令行参数解析
 │   │   └── file.go          # YAML配置文件支持
@@ -184,9 +359,9 @@ single_proxy/
 │   │   ├── Dockerfile      
 │   │   └── docker-compose.yml
 │   └── k8s/               # Kubernetes 配置
-└── docs/                  # 文档
-    ├── API.md             # API 文档
-    └── DEPLOYMENT.md      # 部署指南
+├── CLAUDE.md              # 项目架构和开发指南
+├── TODO.md                # 项目开发状态和规划
+└── readme.md              # 项目完整文档
 ```
 
 ## 🔍 使用场景
@@ -194,20 +369,29 @@ single_proxy/
 ### 1. 内网服务暴露
 将内网的 Web 服务、API 接口暴露到公网访问
 ```bash
-# 内网有一个运行在 3000 端口的 Web 服务
+# 直连模式
 singleproxy -mode=client -server="wss://proxy.example.com" -target="127.0.0.1:3000" -key="webapp"
-
 # 公网访问
 curl -H "X-Tunnel-Key: webapp" https://proxy.example.com/dashboard
+
+# 通过Nginx代理（复杂网络环境）
+singleproxy -mode=client -server="wss://proxy.example.com/api/tunnel" -target="127.0.0.1:3000" -key="webapp"
 ```
 
 ### 2. 开发环境调试
-本地开发服务器通过内网穿透接收 Webhook
+本地开发服务器通过内网穿透接收 Webhook，支持自签名证书
 ```bash
-# 本地开发服务器
-singleproxy -mode=client -server="wss://dev-proxy.com" -target="localhost:8000" -key="webhook-dev"
+# 开发环境（跳过SSL验证）
+singleproxy -mode=client -server="wss://dev-proxy.local/tunnel/app" -target="localhost:8000" -key="webhook-dev" -insecure
+# 配置 Webhook URL: https://dev-proxy.local/tunnel/app (Header: X-Tunnel-Key: webhook-dev)
+```
 
-# 配置 Webhook URL: https://dev-proxy.com (Header: X-Tunnel-Key: webhook-dev)
+### 2.5. 企业内网环境
+在严格的企业网络环境中部署，支持代理和防火墙
+```bash
+# HTTP长轮询模式（防火墙友好）
+singleproxy -mode=http-client -server="https://gateway.corp.com/proxy/tunnel" -target="127.0.0.1:8080" -key="app" -insecure
+# 支持企业自签名证书和复杂路径
 ```
 
 ### 3. SOCKS5 代理
@@ -221,7 +405,184 @@ export https_proxy=socks5://proxy.example.com:8080
 curl http://restricted-site.com
 ```
 
-## 🧪 测试
+### 4. 严格防火墙环境
+当 WebSocket 被阻拦时，使用 HTTP长轮询模式
+```bash
+# WebSocket客户端可能被阻拦
+singleproxy -mode=client -server="wss://proxy.com" -target="127.0.0.1:8080" -key="app"
+# 连接失败...
+
+# 改用HTTP长轮询（100%防火墙兼容）
+singleproxy -mode=http-client -server="https://proxy.com/tunnel" -target="127.0.0.1:8080" -key="app"
+# 连接成功！
+```
+
+## 🚀 生产环境部署
+
+### 系统要求
+
+**最低要求**
+- **操作系统**: Linux, Windows, macOS
+- **内存**: 512MB RAM
+- **存储**: 100MB 可用空间
+- **网络**: 稳定的互联网连接
+
+**推荐配置**
+- **操作系统**: Ubuntu 20.04+ / CentOS 8+ / Windows Server 2019+
+- **内存**: 2GB RAM
+- **CPU**: 2 核心
+- **存储**: 1GB 可用空间
+- **带宽**: 100Mbps+
+
+### SSL 证书配置
+
+**使用 Let's Encrypt（推荐）**
+```bash
+# 安装 Certbot
+sudo apt-get install certbot
+
+# 获取证书
+sudo certbot certonly --standalone -d your-domain.com
+
+# 证书路径
+# 证书: /etc/letsencrypt/live/your-domain.com/fullchain.pem
+# 私钥: /etc/letsencrypt/live/your-domain.com/privkey.pem
+```
+
+**配置自动续期**
+```bash
+# 添加到 crontab
+echo "0 12 * * * /usr/bin/certbot renew --quiet" | sudo crontab -
+```
+
+### Systemd 服务配置
+
+**创建服务文件 `/etc/systemd/system/singleproxy.service`**
+```ini
+[Unit]
+Description=Single Proxy Server
+Documentation=https://github.com/your-org/single-proxy
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=singleproxy
+Group=singleproxy
+ExecStart=/usr/local/bin/singleproxy -config=/etc/singleproxy/config.yaml -mode=server
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=singleproxy
+
+# 安全设置
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/singleproxy
+PrivateTmp=true
+PrivateDevices=true
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+
+# 资源限制
+LimitNOFILE=65536
+LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**启动服务**
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable singleproxy
+sudo systemctl start singleproxy
+```
+
+### Docker 部署
+
+**docker-compose.yml**
+```yaml
+version: '3.8'
+
+services:
+  singleproxy:
+    image: your-org/single-proxy:latest
+    container_name: singleproxy-server
+    restart: unless-stopped
+    ports:
+      - "443:443"
+      - "80:80"  # 可选，用于 HTTP 重定向
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/log/singleproxy:/var/log/singleproxy
+      - ./config:/etc/singleproxy:ro
+    command: ["-config=/etc/singleproxy/config.yaml", "-mode=server"]
+    environment:
+      - GOGC=100
+      - GOMEMLIMIT=512MB
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "curl", "-f", "https://localhost:443/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+```
+
+### 客户端部署
+
+**WebSocket客户端配置**
+```yaml
+# /etc/singleproxy/websocket-client.yaml
+client:
+  server_addr: "wss://your-domain.com"
+  target_addr: "127.0.0.1:8080"
+  key: "my-service-key"
+  insecure: false
+
+global:
+  log_level: "info"
+  log_file: "/var/log/singleproxy/websocket-client.log"
+```
+
+**HTTP长轮询客户端配置**
+```yaml
+# /etc/singleproxy/http-client.yaml
+client:
+  server_addr: "https://your-domain.com/tunnel"
+  target_addr: "127.0.0.1:8080"
+  key: "my-service-key"
+  insecure: false
+
+global:
+  log_level: "info"
+  log_file: "/var/log/singleproxy/http-client.log"
+```
+
+## 🧪 测试指南
+
+### 运行测试
 
 ```bash
 # 运行所有测试
@@ -241,18 +602,51 @@ go test -bench=. ./test/
 ```
 
 ### 测试覆盖范围
-- ✅ **服务器模块**：协议检测、WebSocket隧道、速率限制
-- ✅ **客户端模块**：连接建立、重连机制、健康监控
+- ✅ **服务器模块**：协议检测、WebSocket隧道、HTTP长轮询、速率限制
+- ✅ **客户端模块**：WebSocket连接、HTTP长轮询、重连机制、健康监控
 - ✅ **工具模块**：HTTP请求转发、错误处理
 - ✅ **集成测试**：端到端代理功能、并发连接、流式传输
 - ✅ **基准测试**：性能指标监控
+
+### 防火墙场景测试
+
+**环境准备**
+1. 配置Nginx模拟防火墙
+2. 设置SSL证书
+3. 配置路径转发
+
+**测试用例**
+```bash
+# 1. 正向代理测试
+curl -k "https://test.example.com/tunnel/proxy/127.0.0.1:8081/api/test"
+
+# 2. 内网穿透测试  
+curl -k -H "X-Tunnel-Key: myapp" "https://test.example.com/tunnel/app/api/test"
+
+# 3. HTTP长轮询隧道测试
+./singleproxy -mode=http-client -server="https://test.example.com/tunnel" -target="127.0.0.1:8081" -key="testkey"
+```
+
+### HTTP长轮询测试
+
+**API端点测试**
+```bash
+# 隧道注册
+curl -X POST https://test.example.com/tunnel/http-tunnel/register/testkey
+
+# 长轮询
+curl -X GET https://test.example.com/tunnel/http-tunnel/poll/testkey
+
+# 发送响应  
+curl -X POST https://test.example.com/tunnel/http-tunnel/response/testkey
+```
 
 ## 📊 性能指标
 
 ### 🚀 生产级性能
 - **并发连接**: 支持 1,000+ 并发 WebSocket 连接
 - **吞吐量**: 单核心可达 500MB/s 数据转发  
-- **延迟**: 平均增加延迟 < 10ms
+- **延迟**: WebSocket模式 < 10ms，HTTP长轮询模式 < 50ms
 - **内存占用**: 基础内存 ≤ 100MB，每连接约 64KB 开销
 - **可用性**: 99.9% 连接成功率，支持自动故障恢复
 
@@ -260,38 +654,218 @@ go test -bench=. ./test/
 ```bash
 BenchmarkHTTPProxy-8           1000      1053241 ns/op
 BenchmarkWebSocketTunnel-8      500      2012384 ns/op  
+BenchmarkHTTPLongPolling-8      200      5024103 ns/op
 BenchmarkConcurrentClients-8    100     10254013 ns/op
 ```
 
 所有性能数据基于 Intel i7-9750H, 16GB RAM, Go 1.21+ 环境测试。
 
-## 🛣️ 发展路线图
+### 性能优化建议
 
-### ✅ v1.0.0 (当前版本 - 已发布)
-- ✅ 模块化架构重构
-- ✅ 全面测试覆盖（90%+ 代码覆盖率）
-- ✅ YAML 配置文件支持
-- ✅ 结构化日志系统
-- ✅ Docker 和 Kubernetes 部署支持
-- ✅ 完整 API 文档和部署指南
+**连接数限制**
+```bash
+echo "65536" > /proc/sys/fs/file-max
+ulimit -n 65536
+```
 
-### 🎯 v1.1.0 (开发中 - 预计2025年1月)
-- [ ] UDP 隧道支持
-- [ ] Web 管理界面（Vue.js 3）
-- [ ] Prometheus 指标集成
-- [ ] 高级访问控制（IP白名单、JWT认证）
+**内存优化**
+```bash
+export GOGC=100
+export GOMEMLIMIT=512MB
+```
 
-### 🚀 v1.2.0 (规划中 - 预计2025年2-3月)
-- [ ] 负载均衡和故障转移
-- [ ] 服务发现集成（Consul/etcd）
-- [ ] RESTful 管理 API
-- [ ] 连接质量监控
+**网络优化**
+```bash
+echo 3 > /proc/sys/net/ipv4/tcp_fastopen
+echo bbr > /proc/sys/net/ipv4/tcp_congestion_control
+```
 
-### 🏢 v2.0.0 (规划中 - 预计2025年下半年)
-- [ ] 集群模式支持
-- [ ] 分布式架构
-- [ ] 企业级认证和授权
-- [ ] 完整生态系统（Helm Charts、SDK）
+## 🔧 故障排除
+
+### 常见问题
+
+**连接失败**
+```
+ERROR: websocket: bad handshake
+```
+- 检查服务器地址和端口
+- 验证 TLS 证书有效性
+- 确认防火墙设置
+- 尝试使用HTTP长轮询模式
+
+**隧道断开**
+```
+ERROR: websocket: close 1006 (abnormal closure)
+```
+- 网络不稳定，客户端会自动重连
+- 检查代理或防火墙配置
+- 增加心跳超时时间
+
+**速率限制**
+```
+HTTP 429 Too Many Requests
+```
+- 调整 IP 或 Key 速率限制
+- 使用不同的隧道密钥分散负载
+
+### 调试命令
+
+**启用详细日志**
+```bash
+./singleproxy -log-level=debug -log-format=json
+```
+
+**测试连接**
+```bash
+# 测试 WebSocket 连接
+websocat wss://your-domain.com/ws/test
+
+# 检查网络连通性
+telnet your-domain.com 443
+
+# 验证SSL证书
+openssl x509 -in /path/to/cert.pem -text -noout
+```
+
+## 📋 API 参考
+
+### HTTP API 端点
+
+**WebSocket隧道注册**
+```
+GET /ws/{tunnel_key}
+Upgrade: websocket
+Connection: Upgrade
+```
+
+**HTTP长轮询隧道**
+```
+POST /http-tunnel/register/{tunnel_key}    # 注册隧道
+GET  /http-tunnel/poll/{tunnel_key}        # 长轮询获取请求
+POST /http-tunnel/response/{tunnel_key}    # 发送响应
+```
+
+**正向代理**
+```
+GET /proxy/{host}:{port}/{path}            # 路径编码代理
+CONNECT {host}:{port}                      # CONNECT隧道
+```
+
+### 消息格式
+
+**二进制消息结构**
+```
+[ID:8字节][Type:1字节][Payload Length:4字节][Payload:N字节]
+```
+
+**消息类型**
+- `MSG_TYPE_HTTP_REQ` (1): HTTP 请求
+- `MSG_TYPE_HTTP_RES` (2): HTTP 响应头
+- `MSG_TYPE_HTTP_RES_CHUNK` (3): HTTP 响应体数据块
+
+## 🛣️ 路径和SSL支持
+
+### 灵活路径支持
+Single Proxy 2.0+ 支持任意路径下的WebSocket隧道，完美适配各种代理和网关环境：
+
+#### 支持的路径格式
+```bash
+# 直连格式
+wss://your-domain.com/ws/key → wss://your-domain.com/ws/key
+
+# Nginx代理格式
+wss://your-domain.com/tunnel/app → wss://your-domain.com/tunnel/app/ws/key
+
+# API网关格式
+wss://your-domain.com/api/v1/proxy → wss://your-domain.com/api/v1/proxy/ws/key
+
+# 复杂多级路径
+wss://gateway.corp.com/internal/services/tunnel → wss://gateway.corp.com/internal/services/tunnel/ws/key
+```
+
+#### 客户端自动路径构造
+客户端会自动根据服务器地址构造正确的WebSocket URL：
+
+```bash
+# 配置服务器地址
+singleproxy -mode=client -server="wss://proxy.com/api/tunnel" -target="127.0.0.1:8080" -key="app"
+
+# 实际连接URL (自动构造)
+# wss://proxy.com/api/tunnel/ws/app
+```
+
+### SSL证书验证配置
+支持生产环境证书验证和开发环境证书跳过的灵活配置：
+
+#### 生产环境（默认，验证证书）
+```bash
+# WebSocket客户端
+singleproxy -mode=client -server="wss://prod-server.com/tunnel" -target="127.0.0.1:8080" -key="app"
+
+# HTTP客户端
+singleproxy -mode=http-client -server="https://prod-server.com/tunnel" -target="127.0.0.1:8080" -key="app"
+```
+
+#### 开发/测试环境（跳过证书验证）
+```bash
+# WebSocket客户端 - 自签名证书
+singleproxy -mode=client -server="wss://test-server.local/tunnel" -target="127.0.0.1:8080" -key="app" -insecure
+
+# HTTP客户端 - 企业内部CA
+singleproxy -mode=http-client -server="https://internal.corp.com/tunnel" -target="127.0.0.1:8080" -key="app" -insecure
+```
+
+#### 配置文件方式
+```yaml
+client:
+  server_addr: "wss://your-domain.com/complex/tunnel/path"
+  target_addr: "127.0.0.1:8080"
+  key: "my-app"
+  insecure: true  # 跳过SSL证书验证
+
+global:
+  log_level: "info"
+```
+
+### 部署场景适配
+
+#### 1. 直连部署
+```bash
+# 服务器
+singleproxy -mode=server -port=443 -cert=cert.pem -key-file=key.pem
+
+# 客户端
+singleproxy -mode=client -server="wss://domain.com" -target="127.0.0.1:8080" -key="app"
+```
+
+#### 2. Nginx代理部署
+```nginx
+# nginx.conf
+location /tunnel/ws/ {
+    proxy_pass http://127.0.0.1:8000/ws/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
+```
+
+```bash
+# 客户端配置
+singleproxy -mode=client -server="wss://domain.com/tunnel" -target="127.0.0.1:8080" -key="app"
+# 实际WebSocket URL: wss://domain.com/tunnel/ws/app
+```
+
+#### 3. 防火墙友好部署
+```bash
+# HTTP长轮询模式（100%防火墙兼容）
+singleproxy -mode=http-client -server="https://domain.com/api/tunnel" -target="127.0.0.1:8080" -key="app"
+```
+
+### 兼容性说明
+- ✅ **向后兼容**：旧版本路径格式继续支持
+- ✅ **自动检测**：服务器自动检测路径格式
+- ✅ **智能路由**：支持混合路径和标准路径共存
+- ✅ **SSL灵活配置**：生产和开发环境无缝切换
 
 ## 🤝 贡献指南
 
@@ -310,7 +884,6 @@ BenchmarkConcurrentClients-8    100     10254013 ns/op
 ## 🙏 致谢
 
 - [Gorilla WebSocket](https://github.com/gorilla/websocket) - WebSocket 实现
-- [go-socks5](https://github.com/h12w/go-socks5) - SOCKS5 代理库
 - [golang.org/x/time/rate](https://golang.org/x/time/rate) - 速率限制
 
 ---

@@ -371,6 +371,11 @@ func (c *TunnelClient) keepAlive() {
 
 // Connect 连接到服务器并建立隧道 (修改为非阻塞)
 func (c *TunnelClient) Connect() error {
+	// 确保 closeChan 已初始化
+	if c.closeChan == nil {
+		c.closeChan = make(chan struct{})
+	}
+	
 	logger.Info("Attempting to connect to server",
 		"server_addr", c.serverAddr.String(),
 		"key", c.key,
@@ -384,7 +389,17 @@ func (c *TunnelClient) Connect() error {
 	}
 
 	connURL := *c.serverAddr
-	connURL.Path = "/ws/" + c.key
+	// 保留原始路径，并正确构造WebSocket端点路径
+	basePath := connURL.Path
+	if basePath == "" || basePath == "/" {
+		connURL.Path = "/ws/" + c.key
+	} else {
+		// 移除末尾的斜杠，然后附加WebSocket路径
+		if basePath[len(basePath)-1] == '/' {
+			basePath = basePath[:len(basePath)-1]
+		}
+		connURL.Path = basePath + "/ws/" + c.key
+	}
 
 	logger.Debug("Preparing WebSocket connection",
 		"url", connURL.String(),

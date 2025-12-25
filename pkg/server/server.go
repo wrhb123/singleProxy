@@ -12,6 +12,7 @@ import (
 
 	"singleproxy/pkg/config"
 	"singleproxy/pkg/logger"
+	"singleproxy/pkg/protocol"
 	"singleproxy/pkg/utils"
 
 	"github.com/gorilla/websocket"
@@ -45,6 +46,9 @@ type SinglePortProxy struct {
 
 	// SOCKS5 服务器
 	socksServer *socks5.Server
+
+	// HTTP长轮询隧道管理器
+	httpTunnelMgr *httpTunnelManager
 }
 
 // NewSinglePortProxy 创建一个新的服务器实例
@@ -65,9 +69,10 @@ func NewSinglePortProxy(cfg *config.Config) *SinglePortProxy {
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
-		keyLimiters: make(map[string]*rate.Limiter),
-		ipLimiters:  make(map[string]*rate.Limiter),
-		socksServer: socksServer,
+		keyLimiters:   make(map[string]*rate.Limiter),
+		ipLimiters:    make(map[string]*rate.Limiter),
+		socksServer:   socksServer,
+		httpTunnelMgr: newHTTPTunnelManager(),
 	}
 }
 
@@ -293,7 +298,8 @@ func (p *SinglePortProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"headers", utils.SanitizeHeaders(r.Header))
 
 	// 路由1: 处理来自内网客户端的 WebSocket 隧道连接
-	if strings.HasPrefix(r.URL.Path, "/ws/") {
+	// 支持任意路径下的 /ws/ 端点，例如：/ws/key 或 /path/ws/key
+	if strings.Contains(r.URL.Path, "/ws/") && strings.HasSuffix(r.URL.Path, strings.Split(r.URL.Path, "/ws/")[1]) {
 		logger.Debug("Routing to tunnel registration handler",
 			"path", r.URL.Path,
 			"remote_addr", r.RemoteAddr)
@@ -301,7 +307,27 @@ func (p *SinglePortProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 路由2: 处理来自公网的普通 HTTP 请求 (内网穿透)
+	// 路由1.5: 处理HTTP长轮询模式的隧道连接
+	if strings.HasPrefix(r.URL.Path, "/http-tunnel/") {
+		logger.Debug("Routing to HTTP tunnel handler",
+			"path", r.URL.Path,
+			"method", r.Method,
+			"remote_addr", r.RemoteAddr)
+		p.handleHTTPTunnel(w, r)
+		return
+	}
+
+	// 路由2: 处理 HTTP CONNECT 代理请求（通过路径访问）
+	if r.Method == "CONNECT" || strings.HasPrefix(r.URL.Path, "/proxy/") {
+		logger.Debug("Routing to HTTP CONNECT proxy handler",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"remote_addr", r.RemoteAddr)
+		p.handleHTTPProxy(w, r)
+		return
+	}
+
+	// 路由3: 处理来自公网的普通 HTTP 请求 (内网穿透)
 	logger.Debug("Routing to public HTTP request handler",
 		"path", r.URL.Path,
 		"remote_addr", r.RemoteAddr)
@@ -310,11 +336,20 @@ func (p *SinglePortProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // handleTunnelRegistration 处理内网客户端的隧道注册请求
 func (p *SinglePortProxy) handleTunnelRegistration(w http.ResponseWriter, r *http.Request) {
-	key := strings.TrimPrefix(r.URL.Path, "/ws/")
+	// 从路径中提取密钥，支持 /ws/key 或 /path/ws/key 格式
+	var key string
+	if idx := strings.Index(r.URL.Path, "/ws/"); idx >= 0 {
+		key = r.URL.Path[idx+4:] // 跳过 "/ws/" 部分
+	} else {
+		// 如果没有找到 /ws/ 前缀，使用旧的逻辑作为备用
+		key = strings.TrimPrefix(r.URL.Path, "/ws/")
+	}
+	
 	remoteAddr := r.RemoteAddr
 
 	logger.Debug("Processing tunnel registration request",
 		"key", key,
+		"full_path", r.URL.Path,
 		"remote_addr", remoteAddr,
 		"user_agent", r.Header.Get("User-Agent"),
 		"headers", utils.SanitizeHeaders(r.Header))
@@ -387,4 +422,24 @@ func (p *SinglePortProxy) handleTunnelRegistration(w http.ResponseWriter, r *htt
 		"total_active_tunnels", connectionCount)
 
 	p.clientReadLoop(wsConn, key)
+}
+
+// HTTP长轮询模式的隧道管理
+type httpTunnelClient struct {
+	key          string
+	remoteAddr   string
+	lastSeen     time.Time
+	pollChan     chan *protocol.TunnelMessage // 用于发送消息给客户端
+	responseChan chan *protocol.TunnelMessage // 用于接收客户端响应
+}
+
+type httpTunnelManager struct {
+	clients map[string]*httpTunnelClient
+	mu      sync.RWMutex
+}
+
+func newHTTPTunnelManager() *httpTunnelManager {
+	return &httpTunnelManager{
+		clients: make(map[string]*httpTunnelClient),
+	}
 }

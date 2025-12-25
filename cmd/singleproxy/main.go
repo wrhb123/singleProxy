@@ -64,17 +64,31 @@ func main() {
 		if err := srv.Start(); err != nil {
 			logger.Fatal("服务器启动失败", "error", err)
 		}
-	} else {
+	} else if cfg.Mode == "client" {
 		cli, err := client.NewTunnelClient(cfg)
 		if err != nil {
-			logger.Fatal("创建客户端失败", "error", err)
+			logger.Fatal("创建WebSocket客户端失败", "error", err)
 		}
 
-		logger.Info("启动客户端",
+		logger.Info("启动WebSocket客户端",
 			"server", cfg.ServerAddr,
 			"target", cfg.TargetAddr,
 			"key", cfg.Key)
 
 		cli.Run()
+	} else if cfg.Mode == "http-client" {
+		httpCli, err := client.NewHTTPTunnelClient(cfg)
+		if err != nil {
+			logger.Fatal("创建HTTP长轮询客户端失败", "error", err)
+		}
+
+		logger.Info("启动HTTP长轮询客户端",
+			"server", cfg.ServerAddr,
+			"target", cfg.TargetAddr,
+			"key", cfg.Key)
+
+		if err := httpCli.Run(); err != nil {
+			logger.Fatal("HTTP长轮询客户端运行失败", "error", err)
+		}
 	}
 }

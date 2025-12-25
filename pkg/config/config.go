@@ -29,7 +29,7 @@ type Config struct {
 // ParseFlags 解析命令行参数
 func ParseFlags() *Config {
 	config := &Config{}
-	flag.StringVar(&config.Mode, "mode", "server", "运行模式: server 或 client")
+	flag.StringVar(&config.Mode, "mode", "server", "运行模式: server, client, 或 http-client")
 	flag.StringVar(&config.ListenPort, "port", "443", "服务器监听端口")
 	flag.StringVar(&config.ServerAddr, "server", "", "服务器地址, e.g. wss://yourdomain.com (client模式)")
 	flag.StringVar(&config.TargetAddr, "target", "", "目标服务地址, e.g. 127.0.0.1:8080 (client模式)")
@@ -52,12 +52,12 @@ func ParseFlags() *Config {
 
 // Validate 验证配置的有效性
 func (c *Config) Validate() error {
-	if c.Mode != "server" && c.Mode != "client" {
-		return fmt.Errorf("错误: 模式必须是 'server' 或 'client'")
+	if c.Mode != "server" && c.Mode != "client" && c.Mode != "http-client" {
+		return fmt.Errorf("错误: 模式必须是 'server'、'client' 或 'http-client'")
 	}
-	if c.Mode == "client" {
+	if c.Mode == "client" || c.Mode == "http-client" {
 		if c.ServerAddr == "" || c.TargetAddr == "" {
-			return fmt.Errorf("错误: client模式需要指定 -server 和 -target 参数")
+			return fmt.Errorf("错误: %s模式需要指定 -server 和 -target 参数", c.Mode)
 		}
 	}
 	return nil
