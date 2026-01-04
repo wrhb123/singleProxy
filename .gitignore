@@ -73,3 +73,4 @@ node_modules/
 .serena
 .spec-*
 claude.md
+.ace-tool/

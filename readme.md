@@ -1,4 +1,4 @@
-# Single Proxy
+# Single Proxy - 基于WebSocket的内网穿透工具
 
 [![Go](https://img.shields.io/badge/Go-1.21+-blue.svg)](https://golang.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -7,7 +7,7 @@
 
 🚀 **高性能、多协议的内网穿透和代理工具**
 
-Single Proxy 是一个基于现代化架构设计的网络代理解决方案，支持 WebSocket 和 HTTP长轮询双模式内网穿透、SOCKS5代理、HTTP正向代理等多种功能。通过智能协议检测实现单端口多服务复用，具备100%防火墙兼容性和生产级性能。
+Single Proxy 是一个基于现代化架构设计的网络代理解决方案，支持 WebSocket 和 HTTP长轮询双模式内网穿透、SOCKS5代理、HTTP路径代理等多种功能。通过智能协议检测实现单端口多服务复用，具备100%防火墙兼容性和生产级性能。
 
 ## ✨ 核心特性
 
@@ -21,7 +21,7 @@ Single Proxy 是一个基于现代化架构设计的网络代理解决方案，�
 ### 🌐 完整代理生态
 - **内网穿透** 基于 WebSocket/HTTP长轮询的双模式隧道
 - **SOCKS5 代理** 支持任意 TCP 流量转发  
-- **HTTP正向代理** 支持路径编码和CONNECT方法
+- **HTTP路径代理** 支持基于路径的正向代理访问
 - **流式传输** 支持大文件传输，避免内存溢出
 - **灵活路径支持** 兼容Nginx代理、API网关等复杂路径场景
 
@@ -42,9 +42,9 @@ Single Proxy 是一个基于现代化架构设计的网络代理解决方案，�
 
 ## 🚀 快速开始
 
-### 安装
+### 1. 安装
 
-#### 方式1：下载预编译二进制
+#### 下载预编译二进制
 ```bash
 # 下载最新版本
 wget https://github.com/yourusername/single_proxy/releases/latest/download/singleproxy-linux-amd64
@@ -52,7 +52,7 @@ chmod +x singleproxy-linux-amd64
 mv singleproxy-linux-amd64 /usr/local/bin/singleproxy
 ```
 
-#### 方式2：从源码构建
+#### 从源码构建
 ```bash
 git clone https://github.com/yourusername/single_proxy.git
 cd single_proxy
@@ -64,105 +64,275 @@ cd single_proxy
 go build -o singleproxy cmd/singleproxy/main.go
 ```
 
-#### 方式3：使用 Docker
-```bash
-docker run -d -p 8080:8080 singleproxy:latest -mode=server -port=8080
-```
+### 2. 启动服务器
 
-### 基本用法
-
-#### 1. 生成配置文件（可选）
 ```bash
-# 生成示例配置文件
+# HTTP 模式（开发测试）
+./singleproxy -mode=server -port=8080
+
+# HTTPS 模式（生产环境）
+./singleproxy -mode=server -port=443 -cert=cert.pem -key-file=key.pem
+
+# 生成配置文件
 ./singleproxy -generate-config > config.yaml
-
-# 编辑配置文件后使用
 ./singleproxy -config config.yaml
 ```
 
-#### 2. 启动服务器端
+### 3. 客户端连接
+
 ```bash
-# HTTP 模式（开发测试）
-singleproxy -mode=server -port=8080
-
-# HTTPS 模式（生产环境）
-singleproxy -mode=server -port=443 -cert=/path/to/cert.pem -key-file=/path/to/key.pem
-```
-
-#### 3. 启动客户端
-
-**WebSocket模式（标准，低延迟）**
-```bash
-# 直连模式
-singleproxy \
+# WebSocket模式（推荐）
+./singleproxy \
   -mode=client \
-  -server="wss://your-domain.com" \
+  -server="wss://your-domain.com/ws/my-service" \
   -target="127.0.0.1:3000" \
   -key="my-service"
 
-# 通过Nginx代理模式（支持复杂路径）
-singleproxy \
-  -mode=client \
-  -server="wss://your-domain.com/tunnel/app" \
-  -target="127.0.0.1:3000" \
-  -key="my-service"
-
-# 开发环境（跳过SSL证书验证）
-singleproxy \
-  -mode=client \
-  -server="wss://test-server.local/api/tunnel" \
-  -target="127.0.0.1:3000" \
-  -key="my-service" \
-  -insecure
-```
-
-**HTTP长轮询模式（防火墙友好）**
-```bash
-# 标准HTTPS模式
-singleproxy \
+# HTTP长轮询模式（防火墙友好）
+./singleproxy \
   -mode=http-client \
-  -server="https://your-domain.com/tunnel/http-tunnel" \
+  -server="https://your-domain.com/http-tunnel" \
   -target="127.0.0.1:3000" \
   -key="my-service"
-
-# 自签名证书环境
-singleproxy \
-  -mode=http-client \
-  -server="https://internal-server.corp/api/tunnel" \
-  -target="127.0.0.1:3000" \
-  -key="my-service" \
-  -insecure
 ```
 
-#### 4. 多种访问方式
+## 📚 详细使用指南
 
-**内网穿透访问**
+根据您的部署环境，Single Proxy提供不同的使用方式：
+
+### 环境A：直连Single Proxy（IP:端口方式）
+
+当您可以直接访问Single Proxy服务器的IP和端口时。
+
+#### A1. SOCKS5代理
+
 ```bash
-# 通过隧道访问内网服务（支持复杂路径和参数）
-curl -H "X-Tunnel-Key: my-service" https://your-domain.com/api/users/123?include=profile
+# 基本使用
+curl --socks5 <server_ip>:<port> http://ipinfo.io/ip
+curl --socks5 127.0.0.1:8080 https://httpbin.org/get
 
-# POST请求示例
-curl -X POST -H "X-Tunnel-Key: my-service" \
+# 使用-x参数（推荐）
+curl -x socks5://127.0.0.1:8080 http://ipinfo.io/ip
+curl -x socks5://127.0.0.1:8080 https://api.github.com/zen
+
+# 配置其他工具使用SOCKS5
+export https_proxy=socks5://127.0.0.1:8080
+export http_proxy=socks5://127.0.0.1:8080
+```
+
+#### A2. HTTP路径代理
+
+```bash
+# 访问HTTP网站
+curl http://127.0.0.1:8080/proxy/httpbin.org:80/ip
+curl http://127.0.0.1:8080/proxy/httpbin.org:80/get
+
+# 访问HTTPS网站
+curl http://127.0.0.1:8080/proxy/api.github.com:443/zen
+curl http://127.0.0.1:8080/proxy/ipinfo.io:443/ip
+
+# POST请求
+curl -X POST \
   -H "Content-Type: application/json" \
-  -d '{"name":"test"}' \
-  https://your-domain.com/api/data
+  -d '{"key":"value"}' \
+  http://127.0.0.1:8080/proxy/httpbin.org:80/post
+
+# 带查询参数
+curl "http://127.0.0.1:8080/proxy/httpbin.org:80/get?param1=value1&param2=value2"
 ```
 
-**SOCKS5代理访问**
+#### A3. 内网穿透 - WebSocket隧道
+
+**步骤1：内网客户端建立隧道**
 ```bash
-# SOCKS5代理模式（支持任何TCP协议）
-curl --socks5 your-domain.com:443 http://internal-service.com
-export ALL_PROXY=socks5://your-domain.com:443
+# WebSocket模式（推荐）
+./singleproxy \
+  -mode=client \
+  -server="ws://127.0.0.1:8080/ws/my-service" \
+  -target="127.0.0.1:3000" \
+  -key="my-service"
+
+# WSS加密模式
+./singleproxy \
+  -mode=client \
+  -server="wss://proxy.example.com:443/ws/api-service" \
+  -target="127.0.0.1:8080" \
+  -key="api-service"
 ```
 
-**HTTP正向代理访问**
+**步骤2：外网访问内网服务**
 ```bash
-# 路径编码模式（100%防火墙兼容）
-curl https://your-domain.com/proxy/httpbin.org:80/ip
-curl https://your-domain.com/proxy/api.github.com:443/user
+# 访问内网服务
+curl -H "X-Tunnel-Key: my-service" http://127.0.0.1:8080/
+curl -H "X-Tunnel-Key: api-service" http://127.0.0.1:8080/api/users
 
-# HTTP CONNECT模式  
-curl -x https://your-domain.com http://target.com
+# POST到内网API
+curl -X POST \
+  -H "X-Tunnel-Key: api-service" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin"}' \
+  http://127.0.0.1:8080/api/login
+```
+
+#### A4. 内网穿透 - HTTP长轮询隧道
+
+当网络环境不支持WebSocket时的替代方案：
+
+```bash
+# 客户端使用HTTP长轮询模式
+./singleproxy \
+  -mode=http-client \
+  -server="http://127.0.0.1:8080/http-tunnel" \
+  -target="127.0.0.1:3000" \
+  -key="my-service"
+
+# 访问方式与WebSocket模式相同
+curl -H "X-Tunnel-Key: my-service" http://127.0.0.1:8080/
+```
+
+### 环境B：通过Nginx反向代理（域名路径方式）
+
+当Single Proxy部署在Nginx后面，只能通过特定域名和路径访问时。
+
+#### 前提：Nginx配置
+确保Nginx配置了正确的路径转发（参考项目中的`nginx.conf`文件）
+
+#### B1. SOCKS5代理
+
+⚠️ **注意**：SOCKS5协议不支持路径，在Nginx环境下需要使用SSH隧道：
+
+```bash
+# 方式1：建立SSH隧道到服务器
+ssh -L 1080:127.0.0.1:8000 user@test.example.com
+
+# 然后通过本地端口使用SOCKS5
+curl --socks5 127.0.0.1:1080 http://ipinfo.io/ip
+
+# 方式2：如果Nginx配置允许TCP流量直通（不常见）
+curl --socks5 test.example.com:8000 http://ipinfo.io/ip
+```
+
+#### B2. HTTP路径代理
+
+```bash
+# 基本语法：https://域名/tunnel/proxy/目标主机:端口/路径
+curl https://test.example.com/tunnel/proxy/httpbin.org:80/ip
+curl https://test.example.com/tunnel/proxy/httpbin.org:80/get
+curl https://test.example.com/tunnel/proxy/api.github.com:443/zen
+
+# 带参数的请求
+curl "https://test.example.com/tunnel/proxy/httpbin.org:80/get?param1=value1&param2=value2"
+
+# POST请求
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"key":"value"}' \
+  https://test.example.com/tunnel/proxy/httpbin.org:80/post
+
+# 下载文件
+curl -o file.zip https://test.example.com/tunnel/proxy/example.com:80/downloads/file.zip
+```
+
+#### B3. 内网穿透 - WebSocket隧道
+
+**步骤1：内网客户端建立隧道**
+```bash
+# 通过Nginx的WebSocket路径建立隧道
+./singleproxy \
+  -mode=client \
+  -server="wss://test.example.com/tunnel/ws/web-app" \
+  -target="127.0.0.1:3000" \
+  -key="web-app"
+
+# API服务隧道
+./singleproxy \
+  -mode=client \
+  -server="wss://test.example.com/tunnel/ws/api-service" \
+  -target="127.0.0.1:8080" \
+  -key="api-service"
+
+# 多个服务可以使用不同的密钥
+./singleproxy \
+  -mode=client \
+  -server="wss://test.example.com/tunnel/ws/file-server" \
+  -target="127.0.0.1:9000" \
+  -key="file-server"
+```
+
+**步骤2：外网访问内网服务**
+```bash
+# 访问Web应用
+curl -H "X-Tunnel-Key: web-app" https://test.example.com/tunnel/app/
+curl -H "X-Tunnel-Key: web-app" https://test.example.com/tunnel/app/dashboard
+
+# 访问API服务
+curl -H "X-Tunnel-Key: api-service" https://test.example.com/tunnel/app/api/status
+curl -H "X-Tunnel-Key: api-service" https://test.example.com/tunnel/app/api/users
+
+# 文件上传到内网
+curl -X POST \
+  -H "X-Tunnel-Key: file-server" \
+  -F "file=@document.pdf" \
+  https://test.example.com/tunnel/app/upload
+
+# 认证API调用
+curl -H "X-Tunnel-Key: api-service" \
+  -H "Authorization: Bearer your-token" \
+  https://test.example.com/tunnel/app/protected/data
+```
+
+#### B4. 内网穿透 - HTTP长轮询隧道
+
+```bash
+# 客户端使用HTTP长轮询模式（WebSocket不可用时）
+./singleproxy \
+  -mode=http-client \
+  -server="https://test.example.com/tunnel/http-tunnel" \
+  -target="127.0.0.1:3000" \
+  -key="web-app"
+
+# 访问方式与WebSocket模式完全相同
+curl -H "X-Tunnel-Key: web-app" https://test.example.com/tunnel/app/
+```
+
+## 🎯 实际使用场景
+
+### 场景1：开发环境内网穿透
+```bash
+# 1. 本地启动开发服务器
+npm run dev  # 假设在3000端口
+
+# 2. 建立隧道
+./singleproxy \
+  -mode=client \
+  -server="wss://your-proxy-domain.com/tunnel/ws/dev-app" \
+  -target="127.0.0.1:3000" \
+  -key="dev-app"
+
+# 3. 外网访问（可以分享给同事测试）
+curl -H "X-Tunnel-Key: dev-app" https://your-proxy-domain.com/tunnel/app/
+```
+
+### 场景2：企业防火墙环境下的代理上网
+```bash
+# 访问GitHub API
+curl https://your-proxy-domain.com/tunnel/proxy/api.github.com:443/user
+
+# 访问Docker Hub
+curl https://your-proxy-domain.com/tunnel/proxy/registry-1.docker.io:443/v2/
+
+# 下载文件
+curl -o file.tar.gz https://your-proxy-domain.com/tunnel/proxy/releases.example.com:443/v1.0/file.tar.gz
+```
+
+### 场景3：混合使用
+```bash
+# 内网服务调用外部API
+curl -H "X-Tunnel-Key: backend" \
+  -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"webhook_url": "https://your-proxy-domain.com/tunnel/proxy/api.external.com:443/webhook"}' \
+  https://your-proxy-domain.com/tunnel/app/process
 ```
 
 ## 🎯 支持的连接模式
@@ -186,7 +356,6 @@ Single Proxy服务器在单个端口同时支持多种协议和功能：
 | `/ws/` | WebSocket隧道注册 | WebSocket | 内网客户端连接 |
 | `/http-tunnel/` | HTTP长轮询隧道 | HTTP | 内网客户端连接(备选) |
 | `/proxy/` | 基于路径的代理 | HTTP | 正向代理 |
-| `CONNECT` | HTTP CONNECT隧道 | HTTP | 正向代理 |
 | 其他路径 | 内网穿透 | HTTP | 公网访问内网服务 |
 
 ### 具体功能详解
@@ -203,7 +372,7 @@ curl -x socks5://server:8000 http://target.com
 - ❌ 防火墙可能阻拦
 ```
 
-#### 2. HTTP正向代理（路径模式）
+#### 2. HTTP路径代理
 ```bash
 # 路径编码方式
 curl https://server/proxy/target.com:80/path
@@ -212,21 +381,11 @@ curl https://server/proxy/target.com:80/path
 - ✅ 100%防火墙兼容
 - ✅ 支持复杂路径
 - ✅ 自动路径重写
-- ❌ 仅支持HTTP/HTTPS
+- ✅ 支持HTTP和HTTPS
+- ❌ 需要特定URL格式
 ```
 
-#### 3. HTTP CONNECT隧道
-```bash
-# 标准CONNECT方式
-curl -x http://server:8000 https://target.com
-
-# 特点
-- ✅ 支持HTTPS隧道
-- ✅ 标准HTTP代理协议
-- ❌ 部分防火墙阻拦CONNECT方法
-```
-
-#### 4. WebSocket内网穿透
+#### 3. WebSocket内网穿透
 ```bash
 # 客户端连接
 ./singleproxy -mode=client -server="wss://server/ws/key" -target="127.0.0.1:8080" -key="key"
@@ -241,7 +400,7 @@ curl -H "X-Tunnel-Key: key" https://server/api/data
 - ❌ 需要WebSocket支持
 ```
 
-#### 5. HTTP长轮询内网穿透（备选方案）
+#### 4. HTTP长轮询内网穿透（备选方案）
 ```bash
 # 客户端连接
 ./singleproxy -mode=http-client -server="https://server/tunnel" -target="127.0.0.1:8080" -key="key"
@@ -748,7 +907,6 @@ POST /http-tunnel/response/{tunnel_key}    # 发送响应
 **正向代理**
 ```
 GET /proxy/{host}:{port}/{path}            # 路径编码代理
-CONNECT {host}:{port}                      # CONNECT隧道
 ```
 
 ### 消息格式

@@ -317,10 +317,9 @@ func (p *SinglePortProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 路由2: 处理 HTTP CONNECT 代理请求（通过路径访问）
-	if r.Method == "CONNECT" || strings.HasPrefix(r.URL.Path, "/proxy/") {
-		logger.Debug("Routing to HTTP CONNECT proxy handler",
-			"method", r.Method,
+	// 路由2: 处理基于路径的HTTP代理请求
+	if strings.HasPrefix(r.URL.Path, "/proxy/") {
+		logger.Debug("Routing to HTTP path proxy handler",
 			"path", r.URL.Path,
 			"remote_addr", r.RemoteAddr)
 		p.handleHTTPProxy(w, r)
@@ -344,7 +343,7 @@ func (p *SinglePortProxy) handleTunnelRegistration(w http.ResponseWriter, r *htt
 		// 如果没有找到 /ws/ 前缀，使用旧的逻辑作为备用
 		key = strings.TrimPrefix(r.URL.Path, "/ws/")
 	}
-	
+
 	remoteAddr := r.RemoteAddr
 
 	logger.Debug("Processing tunnel registration request",

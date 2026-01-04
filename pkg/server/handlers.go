@@ -457,10 +457,10 @@ func (p *SinglePortProxy) handleHTTPTunnel(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "Invalid HTTP tunnel path format. Use: /http-tunnel/{operation}/{key}", http.StatusBadRequest)
 		return
 	}
-	
+
 	operation := pathParts[0]
 	key := pathParts[1]
-	
+
 	if key == "" {
 		http.Error(w, "Tunnel key cannot be empty", http.StatusBadRequest)
 		return
@@ -498,7 +498,7 @@ func (p *SinglePortProxy) handleHTTPTunnelRegister(w http.ResponseWriter, r *htt
 
 	// 创建或更新客户端
 	p.httpTunnelMgr.mu.Lock()
-	
+
 	// 清理旧的客户端连接（如果存在）
 	if oldClient, exists := p.httpTunnelMgr.clients[key]; exists {
 		close(oldClient.pollChan)
@@ -674,7 +674,7 @@ func (p *SinglePortProxy) cleanupHTTPTunnelClient(key string) {
 				"key", key,
 				"last_seen", client.lastSeen,
 				"inactive_duration", time.Since(client.lastSeen))
-			
+
 			close(client.pollChan)
 			close(client.responseChan)
 			delete(p.httpTunnelMgr.clients, key)
@@ -796,10 +796,10 @@ func (p *SinglePortProxy) handleHTTPTunnelMessage(msg *protocol.TunnelMessage, k
 	}
 }
 
-// handleHTTPProxy 处理HTTP CONNECT代理请求和基于路径的代理请求
+// handleHTTPProxy 处理基于路径的HTTP代理请求
 func (p *SinglePortProxy) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
-	
+
 	// 检查 IP 速率限制
 	ip, port, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -810,7 +810,7 @@ func (p *SinglePortProxy) handleHTTPProxy(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	logger.Debug("Processing HTTP proxy request",
+	logger.Debug("Processing HTTP path proxy request",
 		"client_ip", ip,
 		"client_port", port,
 		"method", r.Method,
@@ -827,67 +827,53 @@ func (p *SinglePortProxy) handleHTTPProxy(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var targetHost, targetPort string
-
-	if r.Method == "CONNECT" {
-		// 标准 HTTP CONNECT 方法
-		host := r.URL.Host
-		if host == "" {
-			host = r.Host
-		}
-		
-		if strings.Contains(host, ":") {
-			targetHost, targetPort, err = net.SplitHostPort(host)
-			if err != nil {
-				logger.Error("Invalid CONNECT target",
-					"client_ip", ip,
-					"host", host,
-					"error", err)
-				http.Error(w, "Bad Request", http.StatusBadRequest)
-				return
-			}
-		} else {
-			targetHost = host
-			targetPort = "80" // 默认HTTP端口
-		}
-	} else if strings.HasPrefix(r.URL.Path, "/proxy/") {
-		// 基于路径的代理请求：/proxy/host:port/path
-		pathParts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/proxy/"), "/", 2)
-		if len(pathParts) == 0 || pathParts[0] == "" {
-			logger.Error("Invalid proxy path format",
-				"client_ip", ip,
-				"path", r.URL.Path)
-			http.Error(w, "Invalid proxy path format. Use: /proxy/host:port/path", http.StatusBadRequest)
-			return
-		}
-
-		hostPort := pathParts[0]
-		if strings.Contains(hostPort, ":") {
-			targetHost, targetPort, err = net.SplitHostPort(hostPort)
-			if err != nil {
-				logger.Error("Invalid proxy target in path",
-					"client_ip", ip,
-					"host_port", hostPort,
-					"error", err)
-				http.Error(w, "Bad Request", http.StatusBadRequest)
-				return
-			}
-		} else {
-			targetHost = hostPort
-			targetPort = "80" // 默认HTTP端口
-		}
-
-		// 重写请求路径，去掉代理前缀
-		if len(pathParts) > 1 {
-			r.URL.Path = "/" + pathParts[1]
-		} else {
-			r.URL.Path = "/"
-		}
-		r.URL.Host = net.JoinHostPort(targetHost, targetPort)
-		r.Host = r.URL.Host
+	// 只支持基于路径的代理请求：/proxy/host:port/path
+	if !strings.HasPrefix(r.URL.Path, "/proxy/") {
+		logger.Error("Invalid proxy path format",
+			"client_ip", ip,
+			"path", r.URL.Path)
+		http.Error(w, "Invalid proxy path format. Use: /proxy/host:port/path", http.StatusBadRequest)
+		return
 	}
 
-	logger.Info("HTTP proxy connection established",
+	// 解析路径：/proxy/host:port/path
+	pathParts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/proxy/"), "/", 2)
+	if len(pathParts) == 0 || pathParts[0] == "" {
+		logger.Error("Invalid proxy path format",
+			"client_ip", ip,
+			"path", r.URL.Path)
+		http.Error(w, "Invalid proxy path format. Use: /proxy/host:port/path", http.StatusBadRequest)
+		return
+	}
+
+	hostPort := pathParts[0]
+	var targetHost, targetPort string
+
+	if strings.Contains(hostPort, ":") {
+		targetHost, targetPort, err = net.SplitHostPort(hostPort)
+		if err != nil {
+			logger.Error("Invalid proxy target in path",
+				"client_ip", ip,
+				"host_port", hostPort,
+				"error", err)
+			http.Error(w, "Bad Request", http.StatusBadRequest)
+			return
+		}
+	} else {
+		targetHost = hostPort
+		targetPort = "80" // 默认HTTP端口
+	}
+
+	// 重写请求路径，去掉代理前缀
+	if len(pathParts) > 1 {
+		r.URL.Path = "/" + pathParts[1]
+	} else {
+		r.URL.Path = "/"
+	}
+	r.URL.Host = net.JoinHostPort(targetHost, targetPort)
+	r.Host = r.URL.Host
+
+	logger.Info("HTTP path proxy connection established",
 		"client_ip", ip,
 		"target_host", targetHost,
 		"target_port", targetPort,
@@ -910,124 +896,63 @@ func (p *SinglePortProxy) handleHTTPProxy(w http.ResponseWriter, r *http.Request
 		"client_ip", ip,
 		"target_addr", targetAddr)
 
-	if r.Method == "CONNECT" {
-		// CONNECT方法：建立隧道
-		hijacker, ok := w.(http.Hijacker)
-		if !ok {
-			logger.Error("ResponseWriter does not support hijacking",
-				"client_ip", ip,
-				"target_addr", targetAddr)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-			return
-		}
+	// 转发HTTP请求到目标服务器
+	logger.Debug("Forwarding HTTP request to target",
+		"client_ip", ip,
+		"target_addr", targetAddr,
+		"method", r.Method,
+		"path", r.URL.Path)
 
-		w.WriteHeader(http.StatusOK)
-		
-		clientConn, _, err := hijacker.Hijack()
-		if err != nil {
-			logger.Error("Failed to hijack connection",
-				"client_ip", ip,
-				"target_addr", targetAddr,
-				"error", err)
-			return
-		}
-		defer clientConn.Close()
-
-		logger.Debug("Connection hijacked successfully, starting tunnel",
+	// 转发请求到目标服务器
+	err = r.Write(targetConn)
+	if err != nil {
+		logger.Error("Failed to forward request to target",
 			"client_ip", ip,
-			"target_addr", targetAddr)
+			"target_addr", targetAddr,
+			"error", err)
+		http.Error(w, "Bad Gateway", http.StatusBadGateway)
+		return
+	}
 
-		// 发送连接成功响应
-		_, err = clientConn.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
-		if err != nil {
-			logger.Error("Failed to send CONNECT response",
-				"client_ip", ip,
-				"target_addr", targetAddr,
-				"error", err)
-			return
+	// 读取目标服务器的响应
+	targetReader := bufio.NewReader(targetConn)
+	resp, err := http.ReadResponse(targetReader, r)
+	if err != nil {
+		logger.Error("Failed to read response from target",
+			"client_ip", ip,
+			"target_addr", targetAddr,
+			"error", err)
+		http.Error(w, "Bad Gateway", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	// 复制响应头
+	for key, values := range resp.Header {
+		for _, value := range values {
+			w.Header().Add(key, value)
 		}
+	}
 
-		// 开始双向数据转发
-		go func() {
-			defer targetConn.Close()
-			defer clientConn.Close()
-			io.Copy(targetConn, clientConn)
-		}()
+	// 写入状态码
+	w.WriteHeader(resp.StatusCode)
 
-		_, err = io.Copy(clientConn, targetConn)
-		duration := time.Since(startTime)
-		
-		if err != nil {
-			logger.Debug("CONNECT tunnel closed with error",
-				"client_ip", ip,
-				"target_addr", targetAddr,
-				"duration", duration,
-				"error", err)
-		} else {
-			logger.Info("CONNECT tunnel completed successfully",
-				"client_ip", ip,
-				"target_addr", targetAddr,
-				"duration", duration)
-		}
+	// 复制响应体
+	_, err = io.Copy(w, resp.Body)
+	duration := time.Since(startTime)
+
+	if err != nil {
+		logger.Error("Failed to copy response body",
+			"client_ip", ip,
+			"target_addr", targetAddr,
+			"duration", duration,
+			"error", err)
 	} else {
-		// 基于路径的代理：转发HTTP请求
-		logger.Debug("Forwarding HTTP request to target",
+		logger.Info("HTTP path proxy request completed successfully",
 			"client_ip", ip,
 			"target_addr", targetAddr,
 			"method", r.Method,
-			"path", r.URL.Path)
-
-		// 转发请求到目标服务器
-		err = r.Write(targetConn)
-		if err != nil {
-			logger.Error("Failed to forward request to target",
-				"client_ip", ip,
-				"target_addr", targetAddr,
-				"error", err)
-			http.Error(w, "Bad Gateway", http.StatusBadGateway)
-			return
-		}
-
-		// 读取目标服务器的响应
-		targetReader := bufio.NewReader(targetConn)
-		resp, err := http.ReadResponse(targetReader, r)
-		if err != nil {
-			logger.Error("Failed to read response from target",
-				"client_ip", ip,
-				"target_addr", targetAddr,
-				"error", err)
-			http.Error(w, "Bad Gateway", http.StatusBadGateway)
-			return
-		}
-		defer resp.Body.Close()
-
-		// 复制响应头
-		for key, values := range resp.Header {
-			for _, value := range values {
-				w.Header().Add(key, value)
-			}
-		}
-
-		// 写入状态码
-		w.WriteHeader(resp.StatusCode)
-
-		// 复制响应体
-		_, err = io.Copy(w, resp.Body)
-		duration := time.Since(startTime)
-
-		if err != nil {
-			logger.Error("Failed to copy response body",
-				"client_ip", ip,
-				"target_addr", targetAddr,
-				"duration", duration,
-				"error", err)
-		} else {
-			logger.Info("HTTP proxy request completed successfully",
-				"client_ip", ip,
-				"target_addr", targetAddr,
-				"method", r.Method,
-				"status_code", resp.StatusCode,
-				"duration", duration)
-		}
+			"status_code", resp.StatusCode,
+			"duration", duration)
 	}
 }

@@ -54,7 +54,7 @@ func NewHTTPTunnelClient(cfg *config.Config) (*HTTPTunnelClient, error) {
 		transport.TLSClientConfig = &tls.Config{
 			InsecureSkipVerify: cfg.Insecure,
 		}
-		
+
 		logger.Info("HTTP tunnel client TLS configuration",
 			"server_url", cfg.ServerAddr,
 			"insecure_skip_verify", cfg.Insecure,
@@ -78,7 +78,7 @@ func NewHTTPTunnelClient(cfg *config.Config) (*HTTPTunnelClient, error) {
 // Register 注册隧道
 func (c *HTTPTunnelClient) Register() error {
 	url := fmt.Sprintf("%s/http-tunnel/register/%s", c.serverURL, c.key)
-	
+
 	resp, err := c.client.Post(url, "application/json", nil)
 	if err != nil {
 		return fmt.Errorf("failed to register: %v", err)
@@ -97,7 +97,7 @@ func (c *HTTPTunnelClient) Register() error {
 // StartPolling 开始长轮询循环
 func (c *HTTPTunnelClient) StartPolling() {
 	logger.Info("Starting HTTP tunnel polling", "key", c.key)
-	
+
 	for {
 		err := c.pollOnce()
 		if err != nil {
@@ -112,7 +112,7 @@ func (c *HTTPTunnelClient) StartPolling() {
 // pollOnce 执行一次轮询
 func (c *HTTPTunnelClient) pollOnce() error {
 	url := fmt.Sprintf("%s/http-tunnel/poll/%s", c.serverURL, c.key)
-	
+
 	resp, err := c.client.Get(url)
 	if err != nil {
 		return fmt.Errorf("poll request failed: %v", err)
@@ -175,7 +175,7 @@ func (c *HTTPTunnelClient) handleHTTPRequest(msg protocol.TunnelMessage) error {
 
 	// 转发到本地目标服务
 	targetURL := fmt.Sprintf("http://%s%s", c.target, req.URL.RequestURI())
-	
+
 	// 创建转发请求
 	targetReq, err := http.NewRequest(req.Method, targetURL, req.Body)
 	if err != nil {
@@ -201,7 +201,7 @@ func (c *HTTPTunnelClient) handleHTTPRequest(msg protocol.TunnelMessage) error {
 			MaxIdleConnsPerHost: 2,
 		},
 	}
-	
+
 	resp, err := forwardClient.Do(targetReq)
 	if err != nil {
 		logger.Error("Failed to forward request", "error", err)
@@ -216,7 +216,7 @@ func (c *HTTPTunnelClient) handleHTTPRequest(msg protocol.TunnelMessage) error {
 	fmt.Fprintf(&buf, "HTTP/1.1 %s\r\n", resp.Status)
 	resp.Header.Write(&buf)
 	buf.WriteString("\r\n")
-	
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		logger.Error("Failed to read response body", "error", err)

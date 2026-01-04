@@ -375,7 +375,7 @@ func (c *TunnelClient) Connect() error {
 	if c.closeChan == nil {
 		c.closeChan = make(chan struct{})
 	}
-	
+
 	logger.Info("Attempting to connect to server",
 		"server_addr", c.serverAddr.String(),
 		"key", c.key,
